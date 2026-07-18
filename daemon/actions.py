@@ -28,13 +28,15 @@ def raise_window(slot: int) -> bool:
     repo = binding["repo"]
 
     if shutil.which(VSCODE_CLI_COMMAND):
-        result = subprocess.run([VSCODE_CLI_COMMAND, "-r", repo], capture_output=True, timeout=10)
-        if result.returncode == 0:
-            return True
+        subprocess.run([VSCODE_CLI_COMMAND, "-r", repo], capture_output=True, timeout=10)
 
-    # Fallback: activate the Code app via AppleScript. Doesn't target the
-    # specific repo window if multiple are open, just brings *a* VS Code
-    # window forward — better than nothing if `code` CLI isn't on PATH.
+    # `code -r` reuses/reveals the window but doesn't reliably bring it to the
+    # foreground on macOS (confirmed live — it can return success with the
+    # window still behind others). Always follow up with an explicit
+    # AppleScript activate; this doesn't target the specific repo window if
+    # multiple are open, just brings *a* VS Code window forward, but combined
+    # with `code -r` above (which does pick the right window) this reliably
+    # raises the right one to the front in practice.
     subprocess.run(
         ["osascript", "-e", 'tell application "Visual Studio Code" to activate'],
         capture_output=True,
