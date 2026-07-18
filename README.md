@@ -65,7 +65,10 @@ unaffected.
 
 Pressing a claimed pad (or Shift+pad) raises that session's app: VS Code via `code -r`
 if the session came from the extension or its integrated terminal, otherwise whatever
-terminal reported itself via `$TERM_PROGRAM` (see `hooks/post_event.sh` and
+terminal app is actually in the hook's process ancestry at the moment it fires (see
+`hooks/post_event.sh`'s `detect_app`, deliberately not `$TERM_PROGRAM` — that env var is
+inherited down the process tree and goes stale, e.g. a VS Code session whose app was
+ever launched from a terminal would otherwise wrongly report itself as that terminal;
 `daemon.config.TERM_PROGRAM_APP_NAMES` — currently maps `vscode` and `Apple_Terminal`,
 live-verify others as you add them). Raising a plain terminal only brings the app
 forward, not the specific window/tab — there's no `code -r`-equivalent for that.

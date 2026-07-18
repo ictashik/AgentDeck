@@ -68,13 +68,23 @@ PERMISSION_WAIT_TIMEOUT_SECONDS = 290
 # back to AppleScript app activation if this isn't on PATH.
 VSCODE_CLI_COMMAND = "code"
 
-# Slot bindings record the $TERM_PROGRAM of the shell that ran the Claude Code
-# hook (see hooks/post_event.sh), so daemon/actions.py knows which app to
-# raise for a non-VS Code session. Keys are $TERM_PROGRAM's own values;
-# values are the app name AppleScript's `tell application "..."` expects.
-# Best-effort/unverified beyond "vscode" and "Apple_Terminal" — extend as
+# System Events process name for VS Code, used by daemon/actions.py to target
+# the specific window for a repo (by basename match on its title) rather than
+# just bringing *some* VS Code window forward. Needs Accessibility permission
+# granted to whatever process runs the daemon — same requirement the old
+# window_sweep had; degrades to a blanket app-activate if it's not granted.
+VSCODE_PROCESS_NAME = "Code"
+
+# Slot bindings record which app is running the Claude Code session — detected
+# by hooks/post_event.sh walking its own process ancestry (NOT read from
+# $TERM_PROGRAM, which is inherited down the process tree and goes stale: a VS
+# Code session whose app was ever launched from a terminal inherits that
+# terminal's $TERM_PROGRAM, wrongly reporting itself as a terminal). Keys here
+# match detect_app()'s output; values are the app name AppleScript's
+# `tell application "..."` expects. Best-effort/unverified beyond "vscode" and
+# "Apple_Terminal" — extend detect_app()'s path matches (and this map) as
 # other terminals get used for real. Unrecognized values are not activated
-# (avoids passing an untrusted env var straight into an AppleScript string).
+# (avoids passing an untrusted string straight into an AppleScript string).
 TERM_PROGRAM_APP_NAMES = {
     "vscode": "Visual Studio Code",
     "Apple_Terminal": "Terminal",

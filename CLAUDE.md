@@ -52,16 +52,21 @@ setup):
     notification, instead of the normal focus behavior. Record alone (no follow-up pad press)
     is unaffected — still Reject for whatever's focused.
   - **Raising a session's window now covers non-VS-Code apps too.** `hooks/post_event.sh`
-    forwards the hook's own `$TERM_PROGRAM` to `/event`; `daemon/slots.py` stores it on the binding
-    (`app` field); `daemon/actions.raise_window()` uses `code -r` + AppleScript activate for
-    `vscode`, or a plain AppleScript activate against `daemon.config.TERM_PROGRAM_APP_NAMES`
-    (currently `vscode` and `Apple_Terminal`, live-verify others as needed — unrecognized
-    values are deliberately *not* activated, both because there's no known app name for them
-    and to avoid feeding an unrecognized env var straight into an AppleScript string) for
-    anything else — this includes VS Code's own integrated terminal (`$TERM_PROGRAM=vscode`
-    there too, so it still gets the `code -r` path) as well as bare terminal apps. A plain
-    terminal can only be brought to the front as an app, not to the specific tab/window for that
-    repo — there's no `code -r`-equivalent target for that.
+    detects the app by **walking its own process ancestry** (`detect_app`, matching each
+    ancestor's full command path) — deliberately *not* by reading `$TERM_PROGRAM`. That env var
+    is inherited down the process tree, so it goes stale: a VS Code session whose app was ever
+    launched from a terminal (e.g. `code .`) would inherit that terminal's `$TERM_PROGRAM` and
+    wrongly report itself as a terminal, which is exactly the bug that surfaced once this
+    shipped — `daemon/actions.raise_window()` was activating a terminal instead of running
+    `code -r`. The detected app is forwarded to `/event` (payload field still named
+    `term_program`) and stored on the binding (`daemon/slots.py`'s `app` field);
+    `raise_window()` uses `code -r` + AppleScript activate for `vscode` — this covers both the
+    extension and VS Code's own integrated terminal — or a plain AppleScript activate against
+    `daemon.config.TERM_PROGRAM_APP_NAMES` (currently matches `vscode` and `Apple_Terminal`,
+    live-verify/extend `detect_app`'s path matches and this map together as needed;
+    unrecognized values are deliberately *not* activated) for anything else. A plain terminal
+    can only be brought to the front as an app, not to the specific tab/window for that repo —
+    there's no `code -r`-equivalent target for that.
 - **The interaction flow in §1 gained a second tier.** The original flow (Accept/Reject via two
   transport buttons) only covers permission prompts. `AskUserQuestion` calls can't be answered
   by the deck at all (no programmatic answer path exists) — those get their own state

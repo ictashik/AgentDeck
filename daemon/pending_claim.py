@@ -24,7 +24,8 @@ _claim_apps: dict[str, str | None] = {}
 
 def enqueue(cwd: str, term_program: str | None = None) -> bool:
     """Adds `cwd` to the claim queue if it isn't already bound or already
-    queued. `term_program` (the reporting hook's $TERM_PROGRAM, see
+    queued. `term_program` (the app the reporting hook detected via process
+    ancestry — the payload field is still named term_program, see
     hooks/post_event.sh) is remembered so the eventual binding knows which
     app to raise (daemon/actions.py). Returns True if this is a newly-seen
     pending cwd (so the caller can fire a one-time notification), False

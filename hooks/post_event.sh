@@ -14,11 +14,29 @@
 # Never blocks or fails the calling hook: if the hub isn't running, this exits
 # 0 silently so a dead hub can't break sessions.
 #
-# $TERM_PROGRAM (set by the shell that ran this hook — "vscode",
-# "Apple_Terminal", "iTerm.app", etc.) is forwarded so the daemon knows which
-# app to raise on pad press for non-VS Code sessions (daemon/actions.py). GUI
-# launches with no controlling shell just won't have it set — that's fine,
-# actions.py falls back to VS Code in that case.
+# The app to raise on pad press (daemon/actions.py) is detected by walking
+# this process's own ancestry and checking each ancestor's full command path
+# — NOT by reading $TERM_PROGRAM. $TERM_PROGRAM is an env var, and env vars
+# are inherited down the process tree: if VS Code itself was ever launched
+# from a terminal (e.g. `code .`), every child it spawns — including the
+# extension's Claude Code subprocess — inherits that terminal's
+# $TERM_PROGRAM (e.g. "Apple_Terminal"), not "vscode". That inherited-stale
+# value was causing raise_window to activate a terminal instead of running
+# `code -r`. Walking the live process tree instead answers "which app is
+# actually running this session right now," which is what raise_window needs.
+detect_app() {
+  local pid="$$" cmd i
+  for i in $(seq 1 12); do
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    [ -z "$pid" ] || [ "$pid" = "1" ] && return 0
+    cmd="$(ps -o command= -p "$pid" 2>/dev/null)"
+    case "$cmd" in
+      *"Visual Studio Code.app"*) printf 'vscode'; return 0 ;;
+      *"Terminal.app"*) printf 'Apple_Terminal'; return 0 ;;
+      *"iTerm.app"*) printf 'iTerm.app'; return 0 ;;
+    esac
+  done
+}
 set -u
 
 STATE="${1:?usage: post_event.sh <state>}"
@@ -40,12 +58,15 @@ if [ "$STATE" = "waiting_question" ]; then
   [ -n "$QUESTION" ] && DETAIL="$QUESTION"
 fi
 
+APP="$(detect_app)"
+[ -z "$APP" ] && APP="${TERM_PROGRAM:-}"  # fallback: an app we don't recognize by path, trust $TERM_PROGRAM
+
 PAYLOAD="$(jq -n \
   --arg cwd "$CWD" \
   --arg agent "claude-code" \
   --arg state "$STATE" \
   --arg detail "${DETAIL:-}" \
-  --arg term_program "${TERM_PROGRAM:-}" \
+  --arg term_program "$APP" \
   '{cwd: $cwd, agent: $agent, state: $state}
    + (if $detail != "" then {detail: $detail} else {} end)
    + (if $term_program != "" then {term_program: $term_program} else {} end)')"
