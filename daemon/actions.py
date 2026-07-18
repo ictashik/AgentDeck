@@ -22,6 +22,39 @@ def _escape_applescript_string(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _list_vscode_window_titles() -> list[str]:
+    result = subprocess.run(
+        ["osascript", "-e", f'tell application "System Events" to tell process "{VSCODE_PROCESS_NAME}" to get name of every window'],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return []
+    # osascript joins a list with ", " — titles that happen to contain that
+    # exact substring (rare) would split wrong; not worth guarding against
+    # for a personal tool.
+    return [t.strip() for t in result.stdout.split(",") if t.strip()]
+
+
+def _matches_repo(title: str, basename: str) -> bool:
+    """A VS Code window's OS-level title reflects whatever's currently
+    focused *inside* the window, not just the repo — an editor tab uses
+    em-dash segments ("file — repo — Visual Studio Code"), but the Claude
+    Code side panel uses a plain hyphen ("<chat subject> - repo"), with no
+    trailing app-name segment at all. Only the trailing segment identifies
+    the repo reliably; a bare substring/`contains` match is what let an
+    unrelated window (e.g. one whose chat subject happens to mention the
+    repo name) get raised instead of the right one."""
+    for sep in (" — ", " - "):
+        if sep in title:
+            segments = [s.strip() for s in title.split(sep)]
+            segments = [s for s in segments if s and s != "Visual Studio Code"]
+            if segments and segments[-1] == basename:
+                return True
+    return title.strip() == basename
+
+
 def _raise_vscode_window(repo: str) -> None:
     if shutil.which(VSCODE_CLI_COMMAND):
         subprocess.run([VSCODE_CLI_COMMAND, "-r", repo], capture_output=True, timeout=10)
@@ -30,27 +63,26 @@ def _raise_vscode_window(repo: str) -> None:
     # bring it to the foreground when other VS Code windows are open
     # (confirmed live — it can return success with the window still behind
     # others, and doesn't switch which window is frontmost among several).
-    # Target that specific window by basename match on its title via System
-    # Events (needs Accessibility permission on whatever runs the daemon —
-    # same requirement window_sweep used to have). Best-effort: multi-root
-    # workspace titles or duplicate basenames can miss.
-    basename = _escape_applescript_string(Path(repo).name)
-    script = f'''
-    tell application "System Events"
-        tell process "{VSCODE_PROCESS_NAME}"
-            set matches to (every window whose name contains "{basename}")
-            if (count of matches) > 0 then
-                perform action "AXRaise" of item 1 of matches
+    # Resolve the exact window title first (see _matches_repo) so the
+    # AppleScript raise call targets it by exact name — needs Accessibility
+    # permission on whatever runs the daemon, same requirement window_sweep
+    # used to have. Best-effort: multi-root workspace titles can still miss.
+    basename = Path(repo).name
+    title = next((t for t in _list_vscode_window_titles() if _matches_repo(t, basename)), None)
+
+    if title is not None:
+        escaped_title = _escape_applescript_string(title)
+        script = f'''
+        tell application "System Events"
+            tell process "{VSCODE_PROCESS_NAME}"
+                perform action "AXRaise" of (first window whose name is "{escaped_title}")
                 set frontmost to true
-                return "hit"
-            end if
+            end tell
         end tell
-    end tell
-    return "miss"
-    '''
-    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
-    if result.returncode == 0 and result.stdout.strip() == "hit":
-        return
+        '''
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        if result.returncode == 0:
+            return
 
     # Fell through: no Accessibility permission, or no window title matched.
     # Just bring *some* VS Code window forward — better than nothing.
