@@ -57,10 +57,9 @@
             "url": "http://127.0.0.1:8765/permission-wait",
             "timeout": 300,
             "headers": {
-              "X-AgentDeck-Slot": "$AGENTDECK_SLOT",
               "X-AgentDeck-Token": "$AGENTDECK_TOKEN"
             },
-            "allowedEnvVars": ["AGENTDECK_SLOT", "AGENTDECK_TOKEN"]
+            "allowedEnvVars": ["AGENTDECK_TOKEN"]
           }
         ]
       }

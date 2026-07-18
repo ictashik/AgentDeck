@@ -1,6 +1,11 @@
 """FastAPI app bound to 127.0.0.1 only (CLAUDE.md §2 — no hardened security
 needed beyond that, plus the optional local anti-spoofing token in daemon/auth.py).
 
+Sessions are identified by `cwd` (present in every Claude Code hook payload
+already), not a pre-configured slot number — daemon/slots.py resolves cwd ->
+slot, and daemon/pending_claim.py handles the interactive "no binding yet,
+blink the free pads until one is claimed" flow.
+
 - POST /event: lifecycle updates from command hooks (post_event.sh).
 - GET /state: read-only, used by the menu bar and for debugging.
 - POST /permission-wait: the Tier 1 blocking hook. Verified against
@@ -12,12 +17,13 @@ needed beyond that, plus the optional local anti-spoofing token in daemon/auth.p
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from daemon import actions
+from daemon import actions, pending_claim, slots
 from daemon.auth import AUTH_ENABLED, get_or_create_token
 from daemon.config import PERMISSION_WAIT_TIMEOUT_SECONDS
 from daemon.state import VALID_STATES, SessionStore
@@ -42,11 +48,10 @@ def require_token(x_agentdeck_token: str | None = Header(default=None)) -> None:
 
 
 class EventPayload(BaseModel):
-    slot: int
+    cwd: str
     agent: str | None = None
     state: str
     detail: str | None = None
-    cwd: str | None = None
 
 
 @app.post("/event")
@@ -57,13 +62,12 @@ def post_event(payload: EventPayload, x_agentdeck_token: str | None = Header(def
     if payload.state not in VALID_STATES:
         raise HTTPException(status_code=400, detail=f"unknown state: {payload.state}")
 
-    updated = store.update(
-        payload.slot,
-        agent=payload.agent,
-        state=payload.state,
-        detail=payload.detail,
-        cwd=payload.cwd,
-    )
+    slot = slots.find_slot_for_cwd(payload.cwd)
+    if slot is None:
+        pending_claim.enqueue(payload.cwd)
+        return {"ok": True, "pending_claim": True}
+
+    updated = store.update(slot, agent=payload.agent, state=payload.state, detail=payload.detail, cwd=payload.cwd)
     return {"ok": True, "slot": updated.slot, "state": updated.state}
 
 
@@ -100,24 +104,18 @@ def _command_summary(tool_input: dict) -> str | None:
 
 
 @app.post("/permission-wait")
-def permission_wait(
-    payload: dict,
-    x_agentdeck_slot: str | None = Header(default=None),
-    x_agentdeck_token: str | None = Header(default=None),
-) -> dict:
+def permission_wait(payload: dict, x_agentdeck_token: str | None = Header(default=None)) -> dict:
     """The PermissionRequest http hook target. `payload` is Claude Code's own
     hook input (session_id, tool_name, tool_input, cwd, ...) — not a shape we
-    control, so this is a plain dict rather than a pydantic model. The slot is
-    carried via the X-AgentDeck-Slot header (set from $AGENTDECK_SLOT through
-    the hook's `headers`/`allowedEnvVars`, see hooks/claude-settings.snippet.json),
-    since the hook payload itself has no slot field.
+    control, so this is a plain dict rather than a pydantic model.
     """
     require_token(x_agentdeck_token)
     if store is None:
         raise HTTPException(status_code=503, detail="store not initialized")
-    if x_agentdeck_slot is None:
-        raise HTTPException(status_code=400, detail="missing X-AgentDeck-Slot header")
-    slot = int(x_agentdeck_slot)
+
+    cwd = payload.get("cwd")
+    if not cwd:
+        raise HTTPException(status_code=400, detail="hook payload missing cwd")
 
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input") or {}
@@ -128,14 +126,26 @@ def permission_wait(
     if tool_name == "AskUserQuestion":
         return {}
 
+    start = time.monotonic()
+    slot = slots.find_slot_for_cwd(cwd)
+    if slot is None:
+        pending_claim.enqueue(cwd)
+        slot = pending_claim.wait_for_claim(cwd, timeout=PERMISSION_WAIT_TIMEOUT_SECONDS)
+        if slot is None:
+            # Never claimed in time — no decision, let Claude Code's own
+            # prompt show rather than guessing.
+            return {}
+
+    remaining = max(0.0, PERMISSION_WAIT_TIMEOUT_SECONDS - (time.monotonic() - start))
+
     detail = _command_summary(tool_input)
-    store.update(slot, state="waiting_permission", detail=detail)
+    store.update(slot, state="waiting_permission", detail=detail, cwd=cwd)
 
     event = threading.Event()
     with _pending_lock:
         _pending_permissions[slot] = event
 
-    resolved = event.wait(timeout=PERMISSION_WAIT_TIMEOUT_SECONDS)
+    resolved = event.wait(timeout=remaining)
     with _pending_lock:
         decision = _pending_decisions.pop(slot, None) if resolved else None
         _pending_permissions.pop(slot, None)

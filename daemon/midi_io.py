@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 
 import mido
 import rumps
 
-from daemon import actions, http_api
+from daemon import actions, http_api, pending_claim, slots
 from daemon.config import (
     CC_ENCODER_PRESS,
     CC_ENCODER_TURN,
@@ -33,7 +34,7 @@ from daemon.config import (
     PAD_NOTES,
     SLOT_COUNT,
 )
-from daemon.protocol.pad_colors import message_for_state
+from daemon.protocol.pad_colors import message_for_available, message_for_state
 from daemon.state import SessionStore
 
 POLL_INTERVAL_SECONDS = 0.02
@@ -49,6 +50,7 @@ class MidiIO:
         self._stop = threading.Event()
         self._last_pad_fire: dict[int, float] = {}
         self._last_sent_state: dict[int, str] = {}
+        self._last_notified_pending_cwd: str | None = None
 
     def stop(self) -> None:
         self._stop.set()
@@ -102,6 +104,10 @@ class MidiIO:
             return
         self._last_pad_fire[slot] = now
 
+        if slots.get(slot) is None:
+            self._handle_claim_press(slot)
+            return
+
         self.store.set_focus(slot)
         session = self.store.get(slot)
         if session is not None:
@@ -112,6 +118,17 @@ class MidiIO:
                 subtitle=session.state,
                 message=f"{command} — allow?" if session.state == "waiting_permission" else command,
             )
+
+    def _handle_claim_press(self, slot: int) -> None:
+        claimed_cwd = pending_claim.claim(slot)
+        if claimed_cwd is None:
+            return  # unbound pad pressed but nothing is actually pending — no-op
+        self.store.set_focus(slot)
+        rumps.notification(
+            title="AgentDeck",
+            subtitle=f"Pad {slot} assigned",
+            message=Path(claimed_cwd).name,
+        )
 
     def _handle_cc_press(self, control: int) -> None:
         focused = self.store.get_focus()
@@ -156,15 +173,33 @@ class MidiIO:
         )
 
     def _refresh_pad_colors(self) -> None:
+        pending_cwd = pending_claim.current_pending_cwd()
+        if pending_cwd != self._last_notified_pending_cwd:
+            if pending_cwd is not None:
+                rumps.notification(
+                    title="New VS Code Window Detected",
+                    subtitle=Path(pending_cwd).name,
+                    message="Click a blinking pad to assign it!",
+                )
+            self._last_notified_pending_cwd = pending_cwd
+
+        free = set(slots.free_slots()) if pending_cwd is not None else set()
+
         for session in self.store.all():
-            if session.state == self._last_sent_state.get(session.slot):
-                continue
             note = PAD_NOTES[session.slot - 1]
-            msg = message_for_state(note, session.state)
+            if session.slot in free:
+                key = "available"
+                msg = message_for_available(note)
+            else:
+                key = session.state
+                msg = message_for_state(note, session.state)
+
+            if self._last_sent_state.get(session.slot) == key:
+                continue
             self._outport.send(
                 mido.Message("note_on", channel=msg.status - 0x90, note=msg.note, velocity=msg.velocity)
             )
-            self._last_sent_state[session.slot] = session.state
+            self._last_sent_state[session.slot] = key
 
 
 def run_in_background(store: SessionStore) -> MidiIO:

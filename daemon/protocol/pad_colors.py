@@ -93,3 +93,11 @@ STATE_COLORS: dict[str, tuple[int, int]] = {
 def message_for_state(note: int, state: str) -> PadColorMessage:
     color, channel = STATE_COLORS.get(state, (COLOR_OFF, BRIGHTNESS_DIM))
     return pad_color_message(note, color, channel=channel)
+
+
+def message_for_available(note: int) -> PadColorMessage:
+    """A free (unbound) pad blinking to invite claiming — see
+    daemon.pending_claim. WHITE fast-blink: distinct in color from both
+    session blink states (amber=permission, blue=question) at the same
+    rhythm as the more urgent of the two."""
+    return pad_color_message(note, COLOR_WHITE, channel=BLINK_FAST)

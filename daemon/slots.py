@@ -1,8 +1,11 @@
 """~/.agentdeck/slots.json is the source of truth for slot -> repo binding.
-AGENTDECK_SLOT (env var, set per-repo — see hooks/claude-settings.snippet.json)
-still tags each hook event so the daemon knows which slot fired; this module
-answers "given a slot, what repo/label does it belong to" for window-raising
-and menu bar display.
+
+Sessions identify themselves by `cwd` (present in every Claude Code hook
+payload already — no per-repo env var needed). The daemon resolves cwd -> slot
+via this file; when a cwd has no binding yet, daemon/pending_claim.py takes
+over to prompt for one interactively (blink the free pads, claim on press).
+`tools/assign_slot.py` remains for pre-pinning a repo to a specific slot
+without going through that interactive flow.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ import json
 import threading
 from pathlib import Path
 from typing import TypedDict
+
+from daemon.config import SLOT_COUNT
 
 SLOTS_PATH = Path.home() / ".agentdeck" / "slots.json"
 
@@ -43,3 +48,15 @@ def assign(slot: int, repo: str, label: str | None = None) -> None:
 
 def get(slot: int) -> SlotBinding | None:
     return load().get(str(slot))
+
+
+def find_slot_for_cwd(cwd: str) -> int | None:
+    for slot_str, binding in load().items():
+        if binding["repo"] == cwd:
+            return int(slot_str)
+    return None
+
+
+def free_slots() -> list[int]:
+    bound = {int(s) for s in load()}
+    return [slot for slot in range(1, SLOT_COUNT + 1) if slot not in bound]

@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Assign a slot number to a repo. Two things happen:
+"""Pre-pin a repo to a specific slot, writing ~/.agentdeck/slots.json directly.
 
-1. Writes ~/.agentdeck/slots.json, the source of truth daemon/actions.py reads
-   to know which repo to raise a window for.
-2. Writes/merges <repo>/.claude/settings.local.json's "env" block with
-   AGENTDECK_SLOT and AGENTDECK_TOKEN — since the VS Code extension has no
-   shell to `export` from, this is how each repo's Claude Code session picks
-   up its slot number and the anti-spoofing token (see daemon/auth.py) that
-   the PermissionRequest http hook's headers reference. The global hooks in
-   hooks/claude-settings.snippet.json (-> ~/.claude/settings.json) read these
-   via $AGENTDECK_SLOT / $AGENTDECK_TOKEN.
+Not required for normal use — by default, the first Claude Code session in a
+repo the daemon hasn't seen before triggers an interactive claim: all free
+pads blink, press one to assign it (see daemon/pending_claim.py). Use this
+tool only if you want to force a specific repo onto a specific pad ahead of
+time, bypassing that interactive step.
 
-Run this once per repo you plan to work in.
+One-time global setup (token + hooks merged into ~/.claude/settings.json) is
+tools/setup_global_hooks.py, not this script.
 
 Usage:
     python3 tools/assign_slot.py 3 /Users/you/repos/bfit-pipeline
@@ -21,26 +18,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daemon import slots  # noqa: E402
-from daemon.auth import get_or_create_token  # noqa: E402
-
-
-def _write_settings_local_env(repo_path: Path, slot: int, token: str) -> Path:
-    settings_path = repo_path / ".claude" / "settings.local.json"
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-    data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    env = data.setdefault("env", {})
-    env["AGENTDECK_SLOT"] = str(slot)
-    env["AGENTDECK_TOKEN"] = token
-    settings_path.write_text(json.dumps(data, indent=2) + "\n")
-    return settings_path
 
 
 def main() -> None:
@@ -56,16 +39,8 @@ def main() -> None:
         sys.exit(1)
 
     slots.assign(args.slot, str(repo_path), args.label)
-    token = get_or_create_token()
-    settings_path = _write_settings_local_env(repo_path, args.slot, token)
-
     print(f"Slot {args.slot} -> {repo_path} (label: {args.label or repo_path.name})")
     print(f"  {slots.SLOTS_PATH}")
-    print(f"  {settings_path} (env.AGENTDECK_SLOT, env.AGENTDECK_TOKEN)")
-    print(
-        "\nMake sure hooks/claude-settings.snippet.json's contents are merged into "
-        "~/.claude/settings.json (global) — see README."
-    )
 
 
 if __name__ == "__main__":

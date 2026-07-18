@@ -47,6 +47,14 @@ setup):
 - **Loop button gained a real action**: "allow always" doesn't just return an allow decision, it
   writes a conservative rule to the repo's `settings.json` (`daemon/actions.py`) so the same
   command doesn't re-prompt.
+- **§5's "statically assigned via an environment variable" slot model is gone.** No more
+  `AGENTDECK_SLOT`, no more per-repo settings — sessions are identified by `cwd` (already in
+  every hook payload) and the daemon resolves cwd -> slot via `~/.agentdeck/slots.json`
+  (`daemon/slots.py`). The first session in a repo the daemon hasn't seen claims a slot
+  interactively: every free pad blinks white, pressing one binds that repo to it
+  (`daemon/pending_claim.py`), with a notification prompting the click. `tools/assign_slot.py`
+  still exists for pre-pinning a repo to a specific slot, but it's optional now, not required
+  setup. One-time global setup (token + hooks) is `tools/setup_global_hooks.py`.
 
 ## 1. What this is
 
