@@ -3,6 +3,51 @@
 > Working name, rename freely. This file is the project brief — read it fully before writing code.
 > Platform: macOS (MacBook Pro). Controller: AKAI MPK Mini Mk4. Piano keys are explicitly out of scope.
 
+## 0. MVP status — read this first
+
+This file is the **original planning brief**, kept as-is for context. Implementation has since
+moved past it in ways that make several sections below stale. Treat this section as the
+override; everything after it is history, not current spec.
+
+**Where things actually stand** (see [progressboard.md](progressboard.md) for the full history,
+[research/NOTES.md](research/NOTES.md) for live-verified protocol, [README.md](README.md) for
+setup):
+
+- **Protocol discovery is done.** §8's unknowns are resolved: transport CCs, pad note numbers,
+  encoder CCs, and the pad-LED-color scheme are all live-verified against the real unit (not
+  guessed from third-party docs, several of which turned out wrong for this unit). Only the
+  onboard screen text protocol remains unresolved — permanently downgraded to a stretch goal;
+  the macOS notification banner is the real "glance" mechanism, not a fallback for it.
+- **Scope narrowed to an MVP**, per an explicit follow-up prompt that takes precedence over §1's
+  "Claude Code / opencode" framing and §2's non-goals:
+  - **Claude Code only.** opencode is not wired up (§11's plugin sketch was never built).
+    Post-MVP target, not current scope.
+  - **No TTY, ever.** The user runs Claude Code exclusively through the VS Code extension, not a
+    terminal. Every mention of `tmux send-keys` as an accept/reject fallback (§10) is dead —
+    there is no shell to send keys into. `daemon/actions.py` raises the VS Code window instead
+    (`code -r`, AppleScript fallback).
+  - **No voice/STT**, contradicting §15's stretch-goal mention — not part of this project's
+    direction.
+  - **Local anti-spoofing token added**, tightening §2's "no hardened security" slightly: a
+    token in `~/.agentdeck/token` is sent as `X-AgentDeck-Token` and checked by the hub. Still
+    not real security (still localhost-only, still a personal tool) — just enough that another
+    local process can't casually POST fake events.
+- **The interaction flow in §1 gained a second tier.** The original flow (Accept/Reject via two
+  transport buttons) only covers permission prompts. `AskUserQuestion` calls can't be answered
+  by the deck at all (no programmatic answer path exists) — those get their own state
+  (`waiting_question`), their own blink pattern (blue, slow — distinct from permission's amber,
+  fast; no confirmed orange/violet LED velocity exists, see research/NOTES.md), and are resolved
+  by **Shift+pad** raising the relevant VS Code window so the user answers it themselves, not by
+  the transport buttons. §7's control table is superseded by this — see `daemon/midi_io.py` for
+  the actual current mapping.
+- **§10's hook JSON is wrong as written** — verified against current docs
+  (code.claude.com/docs/en/hooks): the `PermissionRequest` http hook's response schema is a
+  nested `hookSpecificOutput.decision.behavior`, not the flat `{"decision": "allow"}` sketched
+  there. `hooks/claude-settings.snippet.json` and `daemon/http_api.py` have the corrected shape.
+- **Loop button gained a real action**: "allow always" doesn't just return an allow decision, it
+  writes a conservative rule to the repo's `settings.json` (`daemon/actions.py`) so the same
+  command doesn't re-prompt.
+
 ## 1. What this is
 
 We're turning the top control section of an MPK Mini Mk4 (8 RGB pads, 8 knobs, transport
