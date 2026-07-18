@@ -40,6 +40,11 @@ CC_ENCODER_PRESS = 13
 PAD_NOTES = [36, 37, 38, 39, 40, 41, 42, 43]
 PAD_CHANNEL = 9  # 0-indexed; "channel 10" in 1-indexed MIDI convention
 
+# Live-verified: pad LED color-setting Note On messages (daemon/protocol/pad_colors.py)
+# only take effect on the DAW Port — the plain MIDI Port silently does nothing.
+# Port names are assigned by the OS and vary slightly; match on this substring.
+PAD_LED_PORT_HINT = "DAW Port"
+
 # tmux fallback: env var each session exports so Accept/Reject can fall back to
 # `tmux send-keys` if the HTTP permission-wait hook doesn't behave as expected.
 TMUX_TARGET_ENV_VAR = "AGENTDECK_TMUX_TARGET"

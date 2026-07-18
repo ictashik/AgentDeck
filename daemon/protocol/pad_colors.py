@@ -1,28 +1,32 @@
 """Pad RGB color protocol for the MPK Mini Mk4 ("MPK mini IV").
 
-STATUS: unverified on real hardware. See research/NOTES.md for the full writeup and
-sourcing. Short version: Akai's own (decompiled) Ableton Live 12 control-surface
-script sets pad LEDs via a plain Note On message — no SysEx — where the MIDI
-*channel* selects the brightness/blink mode and the *velocity* selects the color:
+STATUS: live-verified against the real unit. See research/NOTES.md ("Live
+verification: pad LED color") for the full session. Confirmed scheme: pad LEDs
+are set via a plain Note On — no SysEx — sent on the **DAW Port specifically**
+(the same port transport CCs turned out to require; the plain MIDI Port does
+nothing for LEDs), where the MIDI *channel* selects brightness/blink mode and
+the *velocity* selects color:
 
-    note_on(status=0x90 + channel_offset, note=<pad's note number>, velocity=<color>)
+    note_on(status=0x90 + channel, note=<pad's note number>, velocity=<color>)
 
-The four channel-offset constants below (HALF/FULL/BLINK/PULSE) are a **guess**
-carried over from a different device (APC64) on the same control-surface framework
-generation — Ableton's dump is missing the MPK_mini_IV-specific file that would
-confirm these values for this device. Do not trust them until verified live (see
-research/NOTES.md's "Recommended next verification step").
+Confirmed channel semantics (0-indexed MIDI channel byte):
+- 0-3: steady, increasing brightness (0=dim, 3=bright)
+- 6: also steady (untested how it differs from 0-3; not used here)
+- 7-15: blinking, with the blink interval getting *longer* as the channel
+  number increases (7=fastest blink, 15=slowest)
 
-Color velocity values ARE taken directly from the MPK_mini_IV-specific dump
-(research/akai_script_dump/MPK_mini_IV/colors.py) and are higher-confidence than the
-channel offsets, though still not yet confirmed by observation on this unit.
+Color velocity values were already correct from the decompiled Ableton script
+(research/akai_script_dump/MPK_mini_IV/colors.py) and are now confirmed live —
+all work as expected except GREY, which is visually too dim to distinguish
+from OFF on this unit.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Color index -> velocity byte, from research/akai_script_dump/MPK_mini_IV/colors.py.
+# Color index -> velocity byte. Live-confirmed against the real unit; GREY is
+# visually indistinguishable from OFF (too dim), everything else is clearly distinct.
 COLOR_OFF = 0
 COLOR_GREY = 1
 COLOR_WHITE = 3
@@ -31,19 +35,20 @@ COLOR_AMBER = 9
 COLOR_GREEN = 21
 COLOR_BLUE = 45
 
-# UNVERIFIED channel offsets — carried over from APC64/midi.py as a starting guess
-# only, per research/NOTES.md. Confirm against the real MPK Mini Mk4 before trusting.
-HALF_BRIGHTNESS_LED_CHANNEL = 0
-FULL_BRIGHTNESS_LED_CHANNEL = 6
-PULSE_LED_CHANNEL = 10
-BLINK_LED_CHANNEL = 14
+# Channel semantics, live-confirmed (see module docstring). Must be sent on the
+# DAW Port — see daemon.config.PAD_LED_PORT_HINT.
+BRIGHTNESS_DIM = 0
+BRIGHTNESS_BRIGHT = 3
+BLINK_FAST = 7
+BLINK_SLOW = 15
 
 NOTE_ON_STATUS = 0x90
 
 
 @dataclass(frozen=True)
 class PadColorMessage:
-    """A single MIDI Note On message that (hypothesized to) set one pad's LED."""
+    """A single MIDI Note On message that sets one pad's LED. Must be sent on
+    the DAW Port, not the plain MIDI Port — see daemon.config.PAD_LED_PORT_HINT."""
 
     status: int
     note: int
@@ -53,30 +58,31 @@ class PadColorMessage:
         return bytes((self.status, self.note, self.velocity))
 
 
-def pad_color_message(note: int, color: int, *, channel_offset: int = FULL_BRIGHTNESS_LED_CHANNEL) -> PadColorMessage:
-    """Builds the (unverified) Note On message believed to set a pad's LED.
+def pad_color_message(note: int, color: int, *, channel: int = BRIGHTNESS_BRIGHT) -> PadColorMessage:
+    """Builds the Note On message that sets a pad's LED.
 
     `note` is the pad's assigned note number (see daemon.config.PAD_NOTES).
     `color` is one of the COLOR_* constants above.
-    `channel_offset` picks brightness/blink mode — see module docstring caveat.
+    `channel` picks brightness/blink mode — see module docstring.
     """
-    return PadColorMessage(status=NOTE_ON_STATUS + channel_offset, note=note, velocity=color)
+    return PadColorMessage(status=NOTE_ON_STATUS + channel, note=note, velocity=color)
 
 
-# CLAUDE.md §6 state -> pad color mapping. Fill in once channel offsets are
-# confirmed; BLINK_LED_CHANNEL is a guess for waiting_permission's blink requirement,
-# so treat that mapping as the most speculative entry here.
+# CLAUDE.md §6 state -> pad color mapping. Only waiting_permission blinks per
+# §6 ("Only waiting_permission blinks... Everything else is display-only"), so
+# it's the only state using a BLINK_* channel; error uses the same RED at
+# steady brightness to stay visually distinct from it.
 STATE_COLORS: dict[str, tuple[int, int]] = {
-    "idle": (COLOR_WHITE, HALF_BRIGHTNESS_LED_CHANNEL),
-    "thinking": (COLOR_BLUE, FULL_BRIGHTNESS_LED_CHANNEL),
-    "running_tool": (COLOR_AMBER, FULL_BRIGHTNESS_LED_CHANNEL),
-    "waiting_permission": (COLOR_RED, BLINK_LED_CHANNEL),
-    "waiting_input": (COLOR_AMBER, PULSE_LED_CHANNEL),
-    "done": (COLOR_GREEN, FULL_BRIGHTNESS_LED_CHANNEL),
-    "error": (COLOR_RED, FULL_BRIGHTNESS_LED_CHANNEL),
+    "idle": (COLOR_WHITE, BRIGHTNESS_DIM),
+    "thinking": (COLOR_BLUE, BRIGHTNESS_BRIGHT),
+    "running_tool": (COLOR_AMBER, BRIGHTNESS_BRIGHT),
+    "waiting_permission": (COLOR_RED, BLINK_FAST),
+    "waiting_input": (COLOR_AMBER, BRIGHTNESS_DIM),
+    "done": (COLOR_GREEN, BRIGHTNESS_BRIGHT),
+    "error": (COLOR_RED, BRIGHTNESS_BRIGHT),
 }
 
 
 def message_for_state(note: int, state: str) -> PadColorMessage:
-    color, channel_offset = STATE_COLORS.get(state, (COLOR_OFF, HALF_BRIGHTNESS_LED_CHANNEL))
-    return pad_color_message(note, color, channel_offset=channel_offset)
+    color, channel = STATE_COLORS.get(state, (COLOR_OFF, BRIGHTNESS_DIM))
+    return pad_color_message(note, color, channel=channel)

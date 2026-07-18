@@ -1,10 +1,10 @@
 # Protocol discovery notes
 
-Status: **transport CCs, pad notes, and encoder CCs live-verified on the actual unit
-with `tools/mapping_ui.py` (see "Live verification session" below) — this is now
-ground truth and supersedes the third-party docs in several places. Pad-LED-color
-scheme has a strong lead but is unverified on real hardware. Screen text protocol
-unresolved — treat as stretch goal per CLAUDE.md §8 step 5.**
+Status: **transport CCs, pad notes, encoder CCs, and pad LED colors are all
+live-verified on the actual unit** (`tools/mapping_ui.py` for input mapping,
+`tools/pad_color_lab.py` for LED output) — this is ground truth, superseding the
+third-party docs in several places. Only the onboard screen text protocol remains
+unresolved — treated as a stretch goal per CLAUDE.md §8 step 5.
 
 ## Sources used
 
@@ -95,10 +95,10 @@ SysEx-based too.
 SysEx function codes can trigger firmware update mode. Avoid sending untested function
 codes in bulk."* — don't brute-force unknown function codes against the real unit.
 
-## Unverified lead: pad LED color is Note-On based, not SysEx
+## Live-verified: pad LED color is Note-On based, not SysEx
 
-`MPK_mini_IV/colors.py` (decompiled) shows pad LED colors are set via a plain **Note
-On** message, not SysEx:
+`MPK_mini_IV/colors.py` (decompiled) hypothesized pad LED colors are set via a plain
+**Note On** message, not SysEx — this is now **confirmed live on the real unit**:
 
 ```python
 class UIButtonColor(SimpleColor):
@@ -115,38 +115,40 @@ class Rgb:
     BLUE = ...     # value 45
 ```
 
-i.e. `note_on(status=0x90 + channel_offset, note=<pad's note number>, velocity=<color
-index>)`. The four named channel offsets (`HALF_BRIGHTNESS_LED_CHANNEL`,
-`FULL_BRIGHTNESS_LED_CHANNEL`, `BLINK_LED_CHANNEL`, `PULSE_LED_CHANNEL`) come from a
-per-device `midi.py` that Ableton's decompile dump is missing for `MPK_mini_IV`
-specifically (present for other devices, not this one — likely an extraction gap in
-the `gluon` mirror, not something we can fix by reading harder).
+i.e. `note_on(status=0x90 + channel, note=<pad's note number>, velocity=<color
+index>)`. Confirmed with `tools/pad_color_lab.py` (a local web page, same
+press-and-see-immediately pattern as `tools/mapping_ui.py`, purpose-built for this
+since LED state can't be read back over MIDI — the user has to look at the pad and
+report what they see).
 
-`APC64/midi.py` (same framework generation, different device) has the same four
-constant *names* with values `HALF=0, FULL=6, PULSE=10, BLINK=14` — plausible as a
-starting guess (looks like `base_channel + N*4`), but **APC64 is not the same
-hardware and this is a guess, not a confirmed value.** Do not hardcode it as fact.
+**Critical detail that cost the most debugging time**: these Note On messages only
+take effect on the **DAW Port** — identical to the transport-CC finding above. The
+first round of testing sent everything on the plain MIDI Port and saw zero effect at
+all, which looked like the whole hypothesis was wrong. Always try the DAW Port first
+for anything LED/feedback-related on this device.
 
-This is genuinely good news for the v1 scope: if confirmed, pad LEDs need **no SysEx
-at all** — just a Note On, which is simple, low-risk to test (unlike blind SysEx
-function-code guessing — see the firmware-update-mode warning above), and squarely
-within what `mido` already does.
+### Confirmed channel semantics (0-indexed MIDI channel byte)
 
-### Recommended next verification step (Day 2, needs the physical unit)
+| Channel(s) | Behavior |
+|---|---|
+| 0-3 | steady, brightness increases with channel number (0=dim, 3=bright) |
+| 6 | also steady (not investigated further — 0-3 already cover steady use cases) |
+| 7-15 | blinking; blink interval gets **longer** as channel number increases (7=fastest, 15=slowest) |
 
-1. Open the MIDI *output* port (`MPK mini IV MIDI Port` or `...DAW Port`) alongside
-   `tools/midi_monitor.py` listening on the corresponding input, or just watch the pad
-   with your eyes.
-2. Send `note_on(channel=0, note=48, velocity=5)` (guessing "channel offset 0 = full
-   brightness, red") to pad 1's note. Observe: does the pad light up? What color?
-3. Sweep small channel values (0-3) with a known velocity (e.g. 5 = red per the table
-   above) to find which channel value actually lights the pad steady-on vs. does
-   nothing vs. errors.
-4. Once one channel value is confirmed to produce a static color, test another small
-   channel value against the same note to look for blink/pulse behavvior (needed for
-   `waiting_permission`'s blink requirement, §6).
-5. Write confirmed values into `daemon/protocol/pad_colors.py`, replacing the
-   `UNVERIFIED` placeholders and the module-level warning docstring.
+Color (velocity) values were already correct from the decompiled script and are now
+confirmed live — every color renders as expected except GREY, which is visually too
+dim to distinguish from OFF on this unit (still encoded in `pad_colors.py` for
+completeness, just don't rely on it being visually distinct).
+
+Per CLAUDE.md §6 ("Only `waiting_permission` blinks... everything else is
+display-only"), only that one state uses a `BLINK_*` channel (channel 7, the fastest
+blink) — every other state uses `BRIGHTNESS_DIM` (0) or `BRIGHTNESS_BRIGHT` (3).
+`error` deliberately reuses RED at steady brightness rather than blink, so it stays
+visually distinct from `waiting_permission`.
+
+Implemented and live-tested end-to-end in `daemon/protocol/pad_colors.py` —
+`message_for_state()` output for `waiting_permission` was sent to the real pad 1 and
+confirmed to blink red as expected.
 
 ## Unresolved: onboard screen text protocol
 
