@@ -1,6 +1,8 @@
 # Protocol discovery notes
 
-Status: **transport/pad note numbers confirmed from a primary source. Pad-LED-color
+Status: **transport CCs, pad notes, and encoder CCs live-verified on the actual unit
+with `tools/mapping_ui.py` (see "Live verification session" below) — this is now
+ground truth and supersedes the third-party docs in several places. Pad-LED-color
 scheme has a strong lead but is unverified on real hardware. Screen text protocol
 unresolved — treat as stretch goal per CLAUDE.md §8 step 5.**
 
@@ -15,11 +17,16 @@ unresolved — treat as stretch goal per CLAUDE.md §8 step 5.**
    framework generation, so its constant *names* (not values) are a useful hint.
 2. `github.com/philoSurfer/reason_akai_mpk_mini_mk4` — independent, non-Ableton
    reverse-engineering project (Reason Studios Remote integration) with its own
-   `docs/MPK_MINI_IV_MIDI_SPEC.md`, built from live device probing. This is the primary
-   source for the device-ID/SysEx-preset findings below, and it **independently
-   corroborates** the CC numbers CLAUDE.md §7 sourced from a third, separate community
-   project — three unrelated sources now agree, so treat those CC numbers as confirmed
-   without needing to re-verify on this unit.
+   `docs/MPK_MINI_IV_MIDI_SPEC.md`, built from live device probing. Primary source
+   for the device-ID/SysEx-preset findings below. It also independently reported the
+   same transport CC numbers as CLAUDE.md §7's community source — **but live testing
+   on this actual unit (below) found three of those CCs, and the pad note numbers,
+   to be wrong.** Docs from other people's units are a starting hypothesis, not a
+   substitute for testing your own hardware — don't skip that step next time either.
+3. **Live capture on this unit** via `tools/mapping_ui.py`, a self-service local web
+   page that streams every incoming MIDI message in real time so you can press a
+   control and immediately see what it sends, no guessing which physical button is
+   which from a doc. Raw output saved to `research/live_mapping.json`.
 
 ## Confirmed: device identity
 
@@ -31,46 +38,48 @@ unresolved — treat as stretch goal per CLAUDE.md §8 step 5.**
   Control Port`, plus a DIN-out-only port. Confirmed present on this machine via
   `mido.get_input_names()`.
 
-## Confirmed: transport CC numbers (matches CLAUDE.md §7 placeholders exactly)
+## Live verification session (ground truth for this unit, preset 1 / DAW)
 
-| Button | CC | Notes |
+Captured with `tools/mapping_ui.py` against the real device on preset 1. Full raw
+JSON in `research/live_mapping.json`. This is what `daemon/config.py` now encodes.
+
+### Transport CCs — corrected in 3 places vs. the docs
+
+| Button | CC | vs. docs |
 |---|---|---|
-| Play/Stop | 76 | single toggle button, no separate play vs stop |
-| Record | 77 | |
-| Loop | 74 | |
-| Fast Forward | 78 | |
-| Undo | 73 | SHIFT+Undo = Redo |
-| Tap Tempo | 11 | momentary: 127 press / 0 release. SHIFT+Tap = Click on/off |
-| Shift | 17 | momentary: 127 press / 0 release |
-| Bank − | 15 | momentary |
-| Bank + | 16 | momentary |
+| Play/Stop | 76 | matches |
+| Record | 77 | matches |
+| Loop | 74 | matches |
+| Undo | 73 | matches, SHIFT+Undo = Redo |
+| Tap Tempo | **82** | docs said 11 — **wrong for this unit** |
+| Shift | 17 | matches, momentary: 127 press / 0 release |
+| Bank − | **80** | docs said 15 — **wrong for this unit** |
+| Bank + | **81** | docs said 16 — **wrong for this unit** |
+| Fast Forward | *(none)* | **this unit has no dedicated FF button** — docs said CC78 |
 
-All transport CCs are sent on **channel 1**, to both the MIDI Port and DAW Port.
-SHIFT is momentary and must be tracked in software — shifted combos reuse the same
-primary CC, so e.g. Record (CC77) alone vs SHIFT+Record both send CC77; the SHIFT
-CC17 state around it is what disambiguates.
+All sent on channel 1. Observed exclusively on the **DAW Port**, not the plain MIDI
+Port (docs claimed both — didn't hold up here). Toggle buttons (Play/Stop, Record,
+Loop, Undo) send 127 on press only, no release message. Momentary buttons (Tap
+Tempo, Shift, Bank −/+) send 127 on press, 0 on release.
 
-## Confirmed: pad note numbers, default DAW preset, Note mode
+### Pad notes — corrected, contiguous instead of the docs' non-contiguous mapping
 
-Pads send Note On/Off on **channel 10** (drum channel) by default:
+Pads 1-8 send Note On/Off on **channel 10** (0-indexed channel 9), notes **36-43**
+sequentially — not the non-contiguous 48/50/52/53/55/57/59/60 the docs listed.
+Interestingly closer to the General MIDI drum note range (36 = kick) than to the
+"DAW preset" table the Reason project documented for their own unit. Seen on both
+the MIDI Port and the DAW Port (inconsistently — don't rely on only one).
 
-| Pad | Note | Note name |
+**This supersedes `daemon/config.py`'s previous `PAD_NOTES =
+[48, 50, 52, 53, 55, 57, 59, 60]`** (itself already a correction of an earlier
+placeholder) — now `[36, 37, 38, 39, 40, 41, 42, 43]`.
+
+### Push-encoder — no prior documentation existed for this at all
+
+| Control | CC | Notes |
 |---|---|---|
-| 1 | 48 | C3 |
-| 2 | 50 | D3 |
-| 3 | 52 | E3 |
-| 4 | 53 | F3 |
-| 5 | 55 | G3 |
-| 6 | 57 | A3 |
-| 7 | 59 | B3 |
-| 8 | 60 | C4 |
-
-(Bank B is pads 9-16, notes 62-74 — not used here, AgentDeck only needs Bank A's 8 pads.)
-
-**This supersedes `daemon/config.py`'s placeholder `PAD_NOTES = [1..8]`** — updated to
-the real values in this commit. Still worth a quick confirm with
-`tools/midi_monitor.py` once the dedicated AgentDeck preset exists (§13), since presets
-can remap notes — but this is the correct *default* DAW-preset mapping.
+| Turn | 14 | relative: value 1 = one step clockwise, value 127 = one step counter-clockwise |
+| Press | 13 | momentary, 127 on press |
 
 ## Confirmed: SysEx envelope + preset read/write (not directly needed for AgentDeck, but validates the device-ID bytes above)
 
