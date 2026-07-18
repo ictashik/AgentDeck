@@ -25,6 +25,7 @@ _lock = threading.Lock()
 class SlotBinding(TypedDict):
     repo: str
     label: str
+    app: str | None
 
 
 def load() -> dict[str, SlotBinding]:
@@ -40,14 +41,20 @@ def save(bindings: dict[str, SlotBinding]) -> None:
         SLOTS_PATH.write_text(json.dumps(bindings, indent=2))
 
 
-def assign(slot: int, repo: str, label: str | None = None) -> None:
+def assign(slot: int, repo: str, label: str | None = None, app: str | None = None) -> None:
     bindings = load()
-    bindings[str(slot)] = {"repo": repo, "label": label or Path(repo).name}
+    bindings[str(slot)] = {"repo": repo, "label": label or Path(repo).name, "app": app}
     save(bindings)
 
 
 def get(slot: int) -> SlotBinding | None:
     return load().get(str(slot))
+
+
+def unassign(slot: int) -> None:
+    bindings = load()
+    bindings.pop(str(slot), None)
+    save(bindings)
 
 
 def find_slot_for_cwd(cwd: str) -> int | None:

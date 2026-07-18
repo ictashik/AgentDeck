@@ -52,6 +52,7 @@ class EventPayload(BaseModel):
     agent: str | None = None
     state: str
     detail: str | None = None
+    term_program: str | None = None
 
 
 @app.post("/event")
@@ -64,7 +65,7 @@ def post_event(payload: EventPayload, x_agentdeck_token: str | None = Header(def
 
     slot = slots.find_slot_for_cwd(payload.cwd)
     if slot is None:
-        pending_claim.enqueue(payload.cwd)
+        pending_claim.enqueue(payload.cwd, payload.term_program)
         return {"ok": True, "pending_claim": True}
 
     updated = store.update(slot, agent=payload.agent, state=payload.state, detail=payload.detail, cwd=payload.cwd)

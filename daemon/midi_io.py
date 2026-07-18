@@ -5,8 +5,8 @@ only work on that port (live-verified, see research/NOTES.md), not the plain
 MIDI Port.
 
 No TTY, no tmux, no keystroke injection — this only ever calls into
-daemon.http_api (resolve a pending permission), daemon.actions (raise a VS
-Code window), and daemon.state (focus/read session state).
+daemon.http_api (resolve a pending permission), daemon.actions (raise the
+session's app window), and daemon.state (focus/read session state).
 """
 
 from __future__ import annotations
@@ -33,8 +33,9 @@ from daemon.config import (
     PAD_LED_PORT_HINT,
     PAD_NOTES,
     SLOT_COUNT,
+    UNBIND_ARM_SECONDS,
 )
-from daemon.protocol.pad_colors import message_for_available, message_for_state
+from daemon.protocol.pad_colors import message_for_available, message_for_empty, message_for_state
 from daemon.state import SessionStore
 
 POLL_INTERVAL_SECONDS = 0.02
@@ -51,6 +52,7 @@ class MidiIO:
         self._last_pad_fire: dict[int, float] = {}
         self._last_sent_state: dict[int, str] = {}
         self._last_notified_pending_cwd: str | None = None
+        self._unbind_armed_until: float = 0.0
 
     def stop(self) -> None:
         self._stop.set()
@@ -104,8 +106,19 @@ class MidiIO:
             return
         self._last_pad_fire[slot] = now
 
+        # Record+Pad unbinds a slot (no long-press timing needed — Record has
+        # no release message to hold-detect on, see daemon/config.py). Any
+        # pad press consumes the arm window, hit or not, so a stray press
+        # after the window lapses can't retroactively unbind something later.
+        armed = self._unbind_armed_until > 0.0 and now < self._unbind_armed_until
+        self._unbind_armed_until = 0.0
+
         if slots.get(slot) is None:
             self._handle_claim_press(slot)
+            return
+
+        if armed:
+            self._handle_unbind_press(slot)
             return
 
         self.store.set_focus(slot)
@@ -130,6 +143,18 @@ class MidiIO:
             message=Path(claimed_cwd).name,
         )
 
+    def _handle_unbind_press(self, slot: int) -> None:
+        binding = slots.get(slot)
+        label = Path(binding["repo"]).name if binding else f"slot {slot}"
+        actions.raise_window(slot)  # raise first — needs the binding, which unassign below removes
+        slots.unassign(slot)
+        self.store.reset(slot)
+        rumps.notification(
+            title="AgentDeck",
+            subtitle=f"Pad {slot} unassigned",
+            message=label,
+        )
+
     def _handle_cc_press(self, control: int) -> None:
         focused = self.store.get_focus()
 
@@ -142,6 +167,7 @@ class MidiIO:
         elif control == CC_RECORD:
             if focused is not None:
                 http_api.resolve_permission(focused, "deny")
+            self._unbind_armed_until = time.monotonic() + UNBIND_ARM_SECONDS
         elif control == CC_ENCODER_PRESS:
             self._expand_focused()
         # else: unmapped in the MVP (Undo, Tap Tempo, Bank -/+, knobs) — ignored.
@@ -173,23 +199,45 @@ class MidiIO:
         )
 
     def _refresh_pad_colors(self) -> None:
+        if self.store.is_loading():
+            # Dedup key is the note number (36-43), which never collides with
+            # the per-slot keys (1-8) the main loop below uses — so once
+            # loading flips off, that loop sends every pad's real color fresh
+            # rather than thinking it's already been sent.
+            for note in PAD_NOTES:
+                if self._last_sent_state.get(note) == "loading":
+                    continue
+                msg = message_for_available(note)  # white fast-blink, "hold on"
+                self._outport.send(
+                    mido.Message("note_on", channel=msg.status - 0x90, note=msg.note, velocity=msg.velocity)
+                )
+                self._last_sent_state[note] = "loading"
+            return
+
         pending_cwd = pending_claim.current_pending_cwd()
         if pending_cwd != self._last_notified_pending_cwd:
             if pending_cwd is not None:
                 rumps.notification(
-                    title="New VS Code Window Detected",
+                    title="New Claude Code Session Detected",
                     subtitle=Path(pending_cwd).name,
                     message="Click a blinking pad to assign it!",
                 )
             self._last_notified_pending_cwd = pending_cwd
 
-        free = set(slots.free_slots()) if pending_cwd is not None else set()
+        claimable = set(slots.free_slots()) if pending_cwd is not None else set()
+        bound_slots = {int(s) for s in slots.load()}
 
         for session in self.store.all():
             note = PAD_NOTES[session.slot - 1]
-            if session.slot in free:
+            if session.slot in claimable:
                 key = "available"
                 msg = message_for_available(note)
+            elif session.slot not in bound_slots:
+                # Unbound, and nothing's actively queued to claim it right
+                # now — OFF, distinct from a bound-but-idle session (dim
+                # white). See message_for_empty's docstring.
+                key = "empty"
+                msg = message_for_empty(note)
             else:
                 key = session.state
                 msg = message_for_state(note, session.state)

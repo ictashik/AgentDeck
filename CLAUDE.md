@@ -22,16 +22,46 @@ setup):
   "Claude Code / opencode" framing and §2's non-goals:
   - **Claude Code only.** opencode is not wired up (§11's plugin sketch was never built).
     Post-MVP target, not current scope.
-  - **No TTY, ever.** The user runs Claude Code exclusively through the VS Code extension, not a
-    terminal. Every mention of `tmux send-keys` as an accept/reject fallback (§10) is dead —
-    there is no shell to send keys into. `daemon/actions.py` raises the VS Code window instead
-    (`code -r`, AppleScript fallback).
+  - **No TTY for accept/reject, ever.** Every mention of `tmux send-keys` as an accept/reject
+    fallback (§10) is dead — decisions are always resolved via `/permission-wait`, never
+    keystroke injection. **Window-raising itself, however, is no longer VS-Code-only** — see
+    below, this loosened after the MVP was first built.
   - **No voice/STT**, contradicting §15's stretch-goal mention — not part of this project's
     direction.
   - **Local anti-spoofing token added**, tightening §2's "no hardened security" slightly: a
     token in `~/.agentdeck/token` is sent as `X-AgentDeck-Token` and checked by the hub. Still
     not real security (still localhost-only, still a personal tool) — just enough that another
     local process can't casually POST fake events.
+- **Slot tracking is now purely Claude-Code-hook-driven — no window enumeration at all**, and
+  window-raising covers non-VS-Code sessions too. An
+  earlier iteration (`daemon/window_sweep.py` + `daemon/vscode_windows.py`, since deleted, never
+  committed) tried to auto-bind/unbind slots by matching VS Code window titles via
+  AppleScript/`osascript` System Events against `storage.json`-derived paths — basename matching
+  only (titles don't carry the full path), which proved fragile enough (dirty-file markers,
+  multi-root workspace names) to spuriously unbind a still-open session's slot on the ~20s poll,
+  producing the double-claim-prompt bug that triggered this rewrite. The fix: `daemon/slots.py` /
+  `daemon/pending_claim.py` are the only source of truth now, keyed by the exact `cwd` string a
+  Claude Code hook reports — no separate "is the window still open" signal exists, and none is
+  needed since bindings are no longer auto-unbound at all (see next point).
+  - **Bindings unbind manually, via Record+Pad** (not Shift+long-press — the hardware's toggle
+    buttons, including Record, send press-only with no release message, so hold-duration
+    detection isn't possible; see `research/NOTES.md`'s Shift+Pad section for the same
+    press-only-CC finding applied here). Pressing Record arms a short window
+    (`UNBIND_ARM_SECONDS` in `daemon/config.py`, default 2.5s); the next pad press within it
+    raises that slot's app one last time, then unassigns it and fires a confirmation
+    notification, instead of the normal focus behavior. Record alone (no follow-up pad press)
+    is unaffected — still Reject for whatever's focused.
+  - **Raising a session's window now covers non-VS-Code apps too.** `hooks/post_event.sh`
+    forwards the hook's own `$TERM_PROGRAM` to `/event`; `daemon/slots.py` stores it on the binding
+    (`app` field); `daemon/actions.raise_window()` uses `code -r` + AppleScript activate for
+    `vscode`, or a plain AppleScript activate against `daemon.config.TERM_PROGRAM_APP_NAMES`
+    (currently `vscode` and `Apple_Terminal`, live-verify others as needed — unrecognized
+    values are deliberately *not* activated, both because there's no known app name for them
+    and to avoid feeding an unrecognized env var straight into an AppleScript string) for
+    anything else — this includes VS Code's own integrated terminal (`$TERM_PROGRAM=vscode`
+    there too, so it still gets the `code -r` path) as well as bare terminal apps. A plain
+    terminal can only be brought to the front as an app, not to the specific tab/window for that
+    repo — there's no `code -r`-equivalent target for that.
 - **The interaction flow in §1 gained a second tier.** The original flow (Accept/Reject via two
   transport buttons) only covers permission prompts. `AskUserQuestion` calls can't be answered
   by the deck at all (no programmatic answer path exists) — those get their own state

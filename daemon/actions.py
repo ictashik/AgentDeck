@@ -13,32 +13,41 @@ import subprocess
 from pathlib import Path
 
 from daemon import slots
-from daemon.config import VSCODE_CLI_COMMAND
+from daemon.config import TERM_PROGRAM_APP_NAMES, VSCODE_CLI_COMMAND
 
 
 def raise_window(slot: int) -> bool:
-    """Brings the VS Code window for `slot`'s repo to front. Returns True if
-    an attempt was made (repo bound + a raise mechanism ran), not necessarily
-    that the window actually came forward — no reliable way to confirm that
-    from outside the app."""
+    """Brings the app for `slot`'s repo to front — VS Code (via `code -r`,
+    which also picks the correct window when several are open) if the
+    session was launched from the VS Code extension or its integrated
+    terminal, otherwise whatever terminal app reported the session (see
+    hooks/post_event.sh's $TERM_PROGRAM forwarding and
+    daemon.config.TERM_PROGRAM_APP_NAMES). Returns True if an attempt was
+    made (repo bound + a raise mechanism ran), not necessarily that the
+    window actually came forward — no reliable way to confirm that from
+    outside the app."""
     binding = slots.get(slot)
     if binding is None:
         return False
 
     repo = binding["repo"]
+    app = binding.get("app") or "vscode"
 
-    if shutil.which(VSCODE_CLI_COMMAND):
+    if app == "vscode" and shutil.which(VSCODE_CLI_COMMAND):
         subprocess.run([VSCODE_CLI_COMMAND, "-r", repo], capture_output=True, timeout=10)
 
     # `code -r` reuses/reveals the window but doesn't reliably bring it to the
     # foreground on macOS (confirmed live — it can return success with the
     # window still behind others). Always follow up with an explicit
-    # AppleScript activate; this doesn't target the specific repo window if
-    # multiple are open, just brings *a* VS Code window forward, but combined
-    # with `code -r` above (which does pick the right window) this reliably
-    # raises the right one to the front in practice.
+    # AppleScript activate; this doesn't target a specific window/tab within
+    # the app (no equivalent of `code -r`'s cwd targeting for a plain
+    # terminal), just brings the app forward — combined with `code -r` above
+    # for the VS Code case, this reliably raises the right one in practice.
+    app_name = TERM_PROGRAM_APP_NAMES.get(app)
+    if app_name is None:
+        return app == "vscode"  # unrecognized non-vscode app: nothing safe to activate
     subprocess.run(
-        ["osascript", "-e", 'tell application "Visual Studio Code" to activate'],
+        ["osascript", "-e", f'tell application "{app_name}" to activate'],
         capture_output=True,
         timeout=10,
     )

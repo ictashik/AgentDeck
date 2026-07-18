@@ -67,3 +67,20 @@ PERMISSION_WAIT_TIMEOUT_SECONDS = 290
 # VS Code CLI command used to reuse+raise a window (daemon/actions.py). Falls
 # back to AppleScript app activation if this isn't on PATH.
 VSCODE_CLI_COMMAND = "code"
+
+# Slot bindings record the $TERM_PROGRAM of the shell that ran the Claude Code
+# hook (see hooks/post_event.sh), so daemon/actions.py knows which app to
+# raise for a non-VS Code session. Keys are $TERM_PROGRAM's own values;
+# values are the app name AppleScript's `tell application "..."` expects.
+# Best-effort/unverified beyond "vscode" and "Apple_Terminal" — extend as
+# other terminals get used for real. Unrecognized values are not activated
+# (avoids passing an untrusted env var straight into an AppleScript string).
+TERM_PROGRAM_APP_NAMES = {
+    "vscode": "Visual Studio Code",
+    "Apple_Terminal": "Terminal",
+    "iTerm.app": "iTerm2",
+}
+
+# Record+Pad unbinds a slot (daemon/midi_io.py): Record arms a short window,
+# and the next pad press within it unbinds that slot instead of focusing it.
+UNBIND_ARM_SECONDS = 2.5

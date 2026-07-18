@@ -19,12 +19,16 @@ _lock = threading.Lock()
 _queue: list[str] = []
 _claim_events: dict[str, threading.Event] = {}
 _claim_results: dict[str, int] = {}
+_claim_apps: dict[str, str | None] = {}
 
 
-def enqueue(cwd: str) -> bool:
+def enqueue(cwd: str, term_program: str | None = None) -> bool:
     """Adds `cwd` to the claim queue if it isn't already bound or already
-    queued. Returns True if this is a newly-seen pending cwd (so the caller
-    can fire a one-time notification), False otherwise."""
+    queued. `term_program` (the reporting hook's $TERM_PROGRAM, see
+    hooks/post_event.sh) is remembered so the eventual binding knows which
+    app to raise (daemon/actions.py). Returns True if this is a newly-seen
+    pending cwd (so the caller can fire a one-time notification), False
+    otherwise."""
     if slots.find_slot_for_cwd(cwd) is not None:
         return False
     with _lock:
@@ -32,6 +36,7 @@ def enqueue(cwd: str) -> bool:
             return False
         _queue.append(cwd)
         _claim_events[cwd] = threading.Event()
+        _claim_apps[cwd] = term_program
         return True
 
 
@@ -48,8 +53,9 @@ def claim(slot: int) -> str | None:
             return None
         cwd = _queue.pop(0)
         event = _claim_events.pop(cwd)
+        app = _claim_apps.pop(cwd, None)
 
-    slots.assign(slot, cwd, label=Path(cwd).name)
+    slots.assign(slot, cwd, label=Path(cwd).name, app=app)
     with _lock:
         _claim_results[cwd] = slot
     event.set()

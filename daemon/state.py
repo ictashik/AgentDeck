@@ -66,6 +66,10 @@ class SessionStore:
             slot: SessionState(slot=slot) for slot in range(1, slot_count + 1)
         }
         self._focused_slot: int | None = None
+        # True from construction until daemon/main.py finishes startup (token,
+        # HTTP server, MIDI ports, the initial VS Code window sweep). All pads
+        # blink while this is set — see midi_io._refresh_pad_colors.
+        self._loading = True
 
     def update(
         self,
@@ -95,6 +99,14 @@ class SessionStore:
         with self._lock:
             return self._slots.get(slot)
 
+    def reset(self, slot: int) -> None:
+        """Clears a slot back to its default idle/unbound look — used when
+        Record+Pad manually unbinds a slot (see daemon/midi_io.py)."""
+        with self._lock:
+            self._slots[slot] = SessionState(slot=slot)
+            if self._focused_slot == slot:
+                self._focused_slot = None
+
     def all(self) -> list[SessionState]:
         with self._lock:
             return [self._slots[slot] for slot in sorted(self._slots)]
@@ -115,3 +127,11 @@ class SessionStore:
     def any_blinking(self) -> bool:
         with self._lock:
             return any(s.state in BLINKING_STATES for s in self._slots.values())
+
+    def is_loading(self) -> bool:
+        with self._lock:
+            return self._loading
+
+    def set_loading(self, loading: bool) -> None:
+        with self._lock:
+            self._loading = loading

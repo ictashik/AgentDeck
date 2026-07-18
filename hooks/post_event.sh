@@ -13,6 +13,12 @@
 #
 # Never blocks or fails the calling hook: if the hub isn't running, this exits
 # 0 silently so a dead hub can't break sessions.
+#
+# $TERM_PROGRAM (set by the shell that ran this hook — "vscode",
+# "Apple_Terminal", "iTerm.app", etc.) is forwarded so the daemon knows which
+# app to raise on pad press for non-VS Code sessions (daemon/actions.py). GUI
+# launches with no controlling shell just won't have it set — that's fine,
+# actions.py falls back to VS Code in that case.
 set -u
 
 STATE="${1:?usage: post_event.sh <state>}"
@@ -39,8 +45,10 @@ PAYLOAD="$(jq -n \
   --arg agent "claude-code" \
   --arg state "$STATE" \
   --arg detail "${DETAIL:-}" \
+  --arg term_program "${TERM_PROGRAM:-}" \
   '{cwd: $cwd, agent: $agent, state: $state}
-   + (if $detail != "" then {detail: $detail} else {} end)')"
+   + (if $detail != "" then {detail: $detail} else {} end)
+   + (if $term_program != "" then {term_program: $term_program} else {} end)')"
 
 TOKEN_HEADER=()
 if [ -f "$TOKEN_FILE" ]; then

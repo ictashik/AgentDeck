@@ -32,6 +32,7 @@ def main() -> None:
     http_thread.start()
 
     midi_io.run_in_background(store)
+    store.set_loading(False)  # stop the all-pads loading blink
 
     app = AgentDeckApp(store)
     app.run()
