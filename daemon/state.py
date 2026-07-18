@@ -18,14 +18,28 @@ State = Literal[
     "thinking",
     "running_tool",
     "waiting_permission",
+    "waiting_question",
     "waiting_input",
     "done",
     "error",
 ]
 
 VALID_STATES: frozenset[str] = frozenset(
-    ("idle", "thinking", "running_tool", "waiting_permission", "waiting_input", "done", "error")
+    (
+        "idle",
+        "thinking",
+        "running_tool",
+        "waiting_permission",
+        "waiting_question",
+        "waiting_input",
+        "done",
+        "error",
+    )
 )
+
+# States that blink on the pad (CLAUDE.md §6 said only waiting_permission; the
+# MVP prompt adds waiting_question with a visually distinct slower rhythm).
+BLINKING_STATES: frozenset[str] = frozenset(("waiting_permission", "waiting_question"))
 
 
 @dataclass
@@ -38,7 +52,7 @@ class SessionState:
     updated_at: float = field(default_factory=time.time)
 
     def is_blinking(self) -> bool:
-        return self.state == "waiting_permission"
+        return self.state in BLINKING_STATES
 
 
 class SessionStore:
@@ -97,3 +111,7 @@ class SessionStore:
     def any_waiting_permission(self) -> bool:
         with self._lock:
             return any(s.state == "waiting_permission" for s in self._slots.values())
+
+    def any_blinking(self) -> bool:
+        with self._lock:
+            return any(s.state in BLINKING_STATES for s in self._slots.values())

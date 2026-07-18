@@ -68,15 +68,22 @@ def pad_color_message(note: int, color: int, *, channel: int = BRIGHTNESS_BRIGHT
     return PadColorMessage(status=NOTE_ON_STATUS + channel, note=note, velocity=color)
 
 
-# CLAUDE.md §6 state -> pad color mapping. Only waiting_permission blinks per
-# §6 ("Only waiting_permission blinks... Everything else is display-only"), so
-# it's the only state using a BLINK_* channel; error uses the same RED at
-# steady brightness to stay visually distinct from it.
+# State -> pad color mapping. Two states blink (see state.BLINKING_STATES):
+# waiting_permission (Tier 1, fast) and waiting_question (Tier 2, slow) need to
+# be visually distinguishable at a glance, per the MVP spec's "orange fast /
+# violet slow" requirement. We don't have a confirmed ORANGE or VIOLET velocity
+# value (only OFF/GREY/WHITE/RED/AMBER/GREEN/BLUE are confirmed — see module
+# docstring), so this substitutes AMBER (closest to orange) fast-blink for
+# permission and BLUE slow-blink for question: distinct in both color *and*
+# rhythm, using only confirmed-working colors rather than guessing at an
+# unverified velocity value. error deliberately reuses RED at steady
+# brightness rather than blinking, to stay distinct from both blink states.
 STATE_COLORS: dict[str, tuple[int, int]] = {
     "idle": (COLOR_WHITE, BRIGHTNESS_DIM),
     "thinking": (COLOR_BLUE, BRIGHTNESS_BRIGHT),
     "running_tool": (COLOR_AMBER, BRIGHTNESS_BRIGHT),
-    "waiting_permission": (COLOR_RED, BLINK_FAST),
+    "waiting_permission": (COLOR_AMBER, BLINK_FAST),
+    "waiting_question": (COLOR_BLUE, BLINK_SLOW),
     "waiting_input": (COLOR_AMBER, BRIGHTNESS_DIM),
     "done": (COLOR_GREEN, BRIGHTNESS_BRIGHT),
     "error": (COLOR_RED, BRIGHTNESS_BRIGHT),

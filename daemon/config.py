@@ -1,4 +1,4 @@
-"""Central config: slot count, HTTP port, MIDI note/CC numbers, tmux fallback targets.
+"""Central config: slot count, HTTP port, MIDI note/CC numbers.
 
 Transport CCs, pad notes, and encoder CCs below are LIVE-VERIFIED against the real
 unit (preset 1 / DAW) using tools/mapping_ui.py — see research/NOTES.md and
@@ -45,7 +45,18 @@ PAD_CHANNEL = 9  # 0-indexed; "channel 10" in 1-indexed MIDI convention
 # Port names are assigned by the OS and vary slightly; match on this substring.
 PAD_LED_PORT_HINT = "DAW Port"
 
-# tmux fallback: env var each session exports so Accept/Reject can fall back to
-# `tmux send-keys` if the HTTP permission-wait hook doesn't behave as expected.
-TMUX_TARGET_ENV_VAR = "AGENTDECK_TMUX_TARGET"
 SLOT_ENV_VAR = "AGENTDECK_SLOT"
+
+# MPC-style pads are pressure-sensitive and double-fire on a single physical
+# press; ignore repeat Note On for the same slot within this window.
+PAD_DEBOUNCE_SECONDS = 0.4
+
+# How long /permission-wait blocks for a MIDI decision before giving up and
+# returning "no decision" (letting Claude Code's own prompt show). Kept a bit
+# under the hook's own "timeout" in hooks/claude-settings.snippet.json so this
+# server responds cleanly instead of the hook timing out first.
+PERMISSION_WAIT_TIMEOUT_SECONDS = 290
+
+# VS Code CLI command used to reuse+raise a window (daemon/actions.py). Falls
+# back to AppleScript app activation if this isn't on PATH.
+VSCODE_CLI_COMMAND = "code"

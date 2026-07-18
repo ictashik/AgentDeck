@@ -1,8 +1,12 @@
-"""FastAPI app bound to 127.0.0.1 only (CLAUDE.md §2 — no hardened security needed,
-just don't expose this beyond localhost).
+"""FastAPI app bound to 127.0.0.1 only (CLAUDE.md §2 — no hardened security
+needed beyond that, plus the optional local anti-spoofing token in daemon/auth.py).
 
-Day 1 scope: POST /event, GET /state.
-Day 2 scope: POST /permission-wait (blocks until a MIDI accept/reject arrives).
+- POST /event: lifecycle updates from command hooks (post_event.sh).
+- GET /state: read-only, used by the menu bar and for debugging.
+- POST /permission-wait: the Tier 1 blocking hook. Verified against
+  code.claude.com/docs/en/hooks — the response schema is a nested
+  hookSpecificOutput.decision.behavior, NOT a flat {"decision": "allow"} as an
+  earlier draft of this project assumed.
 """
 
 from __future__ import annotations
@@ -10,9 +14,12 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
+from daemon import actions
+from daemon.auth import AUTH_ENABLED, get_or_create_token
+from daemon.config import PERMISSION_WAIT_TIMEOUT_SECONDS
 from daemon.state import VALID_STATES, SessionStore
 
 app = FastAPI(title="AgentDeck hub")
@@ -20,10 +27,18 @@ app = FastAPI(title="AgentDeck hub")
 # Populated by daemon/main.py before the server starts serving.
 store: SessionStore | None = None
 
-# slot -> Event, used by /permission-wait to block until MIDI resolves it (Day 2).
+# slot -> Event/decision, used by /permission-wait to block until MIDI resolves it.
+# Decision is one of "allow", "allow_always", "deny".
 _pending_permissions: dict[int, threading.Event] = {}
 _pending_decisions: dict[int, str] = {}
 _pending_lock = threading.Lock()
+
+
+def require_token(x_agentdeck_token: str | None = Header(default=None)) -> None:
+    if not AUTH_ENABLED:
+        return
+    if x_agentdeck_token != get_or_create_token():
+        raise HTTPException(status_code=401, detail="missing or invalid X-AgentDeck-Token")
 
 
 class EventPayload(BaseModel):
@@ -35,7 +50,8 @@ class EventPayload(BaseModel):
 
 
 @app.post("/event")
-def post_event(payload: EventPayload) -> dict[str, Any]:
+def post_event(payload: EventPayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
+    require_token(x_agentdeck_token)
     if store is None:
         raise HTTPException(status_code=503, detail="store not initialized")
     if payload.state not in VALID_STATES:
@@ -73,38 +89,82 @@ def get_state(slot: int | None = None) -> dict[str, Any]:
     }
 
 
-@app.post("/permission-wait")
-def permission_wait(payload: EventPayload) -> dict[str, str]:
-    """Marks the slot waiting_permission and blocks until resolve_permission()
-    is called by the MIDI thread with an accept/reject decision.
+def _command_summary(tool_input: dict) -> str | None:
+    command = tool_input.get("command")
+    if isinstance(command, str):
+        return command
+    file_path = tool_input.get("file_path")
+    if isinstance(file_path, str):
+        return file_path
+    return None
 
-    Stub for Day 1 — wired up fully once the MIDI accept/reject path exists
-    (CLAUDE.md §10, Day 2 checklist). For now this marks the state and returns
-    immediately with a default "allow" so it doesn't hang Claude Code hooks
-    before the MIDI side is built.
+
+@app.post("/permission-wait")
+def permission_wait(
+    payload: dict,
+    x_agentdeck_slot: str | None = Header(default=None),
+    x_agentdeck_token: str | None = Header(default=None),
+) -> dict:
+    """The PermissionRequest http hook target. `payload` is Claude Code's own
+    hook input (session_id, tool_name, tool_input, cwd, ...) — not a shape we
+    control, so this is a plain dict rather than a pydantic model. The slot is
+    carried via the X-AgentDeck-Slot header (set from $AGENTDECK_SLOT through
+    the hook's `headers`/`allowedEnvVars`, see hooks/claude-settings.snippet.json),
+    since the hook payload itself has no slot field.
     """
+    require_token(x_agentdeck_token)
     if store is None:
         raise HTTPException(status_code=503, detail="store not initialized")
+    if x_agentdeck_slot is None:
+        raise HTTPException(status_code=400, detail="missing X-AgentDeck-Slot header")
+    slot = int(x_agentdeck_slot)
 
-    store.update(payload.slot, agent=payload.agent, state="waiting_permission", detail=payload.detail)
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input") or {}
+
+    # AskUserQuestion also fires PermissionRequest (it's a tool call requiring
+    # permission), but Tier 2 is handled entirely by the PreToolUse hook +
+    # Shift+pad window-raise — the deck can't answer a question, so just defer.
+    if tool_name == "AskUserQuestion":
+        return {}
+
+    detail = _command_summary(tool_input)
+    store.update(slot, state="waiting_permission", detail=detail)
 
     event = threading.Event()
     with _pending_lock:
-        _pending_permissions[payload.slot] = event
+        _pending_permissions[slot] = event
 
-    # Day 1: no MIDI resolver exists yet, so don't actually block indefinitely.
-    # Day 2 will replace this with event.wait(timeout=...) driven by resolve_permission().
-    resolved = event.wait(timeout=0.01)
+    resolved = event.wait(timeout=PERMISSION_WAIT_TIMEOUT_SECONDS)
     with _pending_lock:
-        decision = _pending_decisions.pop(payload.slot, "allow") if resolved else "allow"
-        _pending_permissions.pop(payload.slot, None)
+        decision = _pending_decisions.pop(slot, None) if resolved else None
+        _pending_permissions.pop(slot, None)
 
-    return {"decision": decision}
+    if decision is None:
+        # No MIDI decision arrived in time — return no decision so Claude
+        # Code's own permission prompt shows. Never auto-deny or auto-allow.
+        return {}
+
+    if decision == "allow_always":
+        rule = actions.build_allow_rule(tool_name, tool_input)
+        actions.add_allow_rule(slot, rule)
+        behavior = "allow"
+    else:
+        behavior = decision  # "allow" or "deny"
+
+    store.update(slot, state="thinking")
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {"behavior": behavior},
+        }
+    }
 
 
 def resolve_permission(slot: int, decision: str) -> bool:
-    """Called by the MIDI thread when Accept/Reject is pressed for the focused
-    slot. Returns True if a pending permission-wait was actually resolved."""
+    """Called by the MIDI thread when a transport button is pressed for the
+    focused slot. `decision` is "allow", "allow_always", or "deny". Returns
+    True if a pending permission-wait was actually resolved."""
     with _pending_lock:
         event = _pending_permissions.get(slot)
         if event is None:
@@ -112,3 +172,8 @@ def resolve_permission(slot: int, decision: str) -> bool:
         _pending_decisions[slot] = decision
         event.set()
         return True
+
+
+def has_pending_permission(slot: int) -> bool:
+    with _pending_lock:
+        return slot in _pending_permissions
