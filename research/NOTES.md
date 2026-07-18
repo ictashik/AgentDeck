@@ -81,6 +81,31 @@ placeholder) — now `[36, 37, 38, 39, 40, 41, 42, 43]`.
 | Turn | 14 | relative: value 1 = one step clockwise, value 127 = one step counter-clockwise |
 | Press | 13 | momentary, 127 on press |
 
+### Shift+Pad — a real hardware shift layer, not something to compose in software
+
+Found live while testing the MVP's Shift+pad window-raise gesture: holding Shift while
+pressing a pad does **not** produce the pad's normal Note On plus a separately-held
+Shift CC17 to combine in software. The device itself intercepts the combo and sends a
+dedicated CC instead, on the DAW Port — confirmed for pads 1 and 2:
+
+| Combo | CC |
+|---|---|
+| Shift + Pad 1 | 32 |
+| Shift + Pad 2 | 33 |
+| Shift + Pad N (extrapolated, contiguous) | 31 + N |
+
+A `sysex data=(71,0,93,42,0,1,1)` message was also observed alongside the Shift+Pad2
+press — likely a device-side "mode indicator" for whatever hardcoded LED highlight
+Shift-hold triggers on the unit (unrelated pads visibly light up green while Shift is
+held, per live observation — a firmware feature, not something this project's SysEx
+sends). Not investigated further, not needed for AgentDeck.
+
+**Consequence for daemon/midi_io.py**: don't track a `shift_held` flag and branch pad
+handling on it — that flag would never see the pad press at all, since the hardware
+suppresses the normal Note On during Shift-hold. Just listen for CC32-39 directly; the
+CC arriving on its own *is* the Shift+Pad signal. Live-tested end-to-end: this
+correctly raises the right VS Code window via `daemon/actions.raise_window()`.
+
 ## Confirmed: SysEx envelope + preset read/write (not directly needed for AgentDeck, but validates the device-ID bytes above)
 
 ```

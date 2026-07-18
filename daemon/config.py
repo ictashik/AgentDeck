@@ -40,6 +40,13 @@ CC_ENCODER_PRESS = 13
 PAD_NOTES = [36, 37, 38, 39, 40, 41, 42, 43]
 PAD_CHANNEL = 9  # 0-indexed; "channel 10" in 1-indexed MIDI convention
 
+# Live-verified, undocumented anywhere: holding Shift suppresses the pad's
+# normal Note On entirely (no note_on + separate CC17 to compose in software —
+# the device itself intercepts it) and instead sends a dedicated CC on the DAW
+# Port: CC32 = Shift+Pad1, CC33 = Shift+Pad2, ... CC39 = Shift+Pad8. The CC
+# arriving IS the Shift+Pad signal; no need to separately track Shift state.
+CC_SHIFT_PAD_BASE = 32
+
 # Live-verified: pad LED color-setting Note On messages (daemon/protocol/pad_colors.py)
 # only take effect on the DAW Port — the plain MIDI Port silently does nothing.
 # Port names are assigned by the OS and vary slightly; match on this substring.

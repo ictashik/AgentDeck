@@ -24,7 +24,7 @@ from daemon.config import (
     CC_LOOP,
     CC_PLAY_STOP,
     CC_RECORD,
-    CC_SHIFT,
+    CC_SHIFT_PAD_BASE,
     ENCODER_CCW_VALUE,
     ENCODER_CW_VALUE,
     PAD_CHANNEL,
@@ -47,7 +47,6 @@ class MidiIO:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
         self._stop = threading.Event()
-        self._shift_held = False
         self._last_pad_fire: dict[int, float] = {}
         self._last_sent_state: dict[int, str] = {}
 
@@ -72,12 +71,25 @@ class MidiIO:
     def _handle_message(self, msg: mido.Message) -> None:
         if msg.type == "note_on" and msg.channel == PAD_CHANNEL and msg.velocity > 0:
             self._handle_pad_press(msg.note)
-        elif msg.type == "control_change" and msg.control == CC_SHIFT:
-            self._shift_held = msg.value > 0
         elif msg.type == "control_change" and msg.control == CC_ENCODER_TURN:
             self._handle_encoder_turn(msg.value)
+        elif msg.type == "control_change" and CC_SHIFT_PAD_BASE <= msg.control < CC_SHIFT_PAD_BASE + SLOT_COUNT:
+            if msg.value > 0:
+                self._handle_shift_pad_press(msg.control - CC_SHIFT_PAD_BASE + 1)
         elif msg.type == "control_change" and msg.value > 0:
             self._handle_cc_press(msg.control)
+
+    def _handle_shift_pad_press(self, slot: int) -> None:
+        # Live-verified: holding Shift suppresses the pad's normal Note On
+        # entirely and the device sends this dedicated CC instead (see
+        # daemon.config.CC_SHIFT_PAD_BASE) — there is no separate "Shift held"
+        # flag to check, the CC arriving on its own means Shift+Pad happened.
+        now = time.monotonic()
+        last = self._last_pad_fire.get(slot, 0.0)
+        if now - last < PAD_DEBOUNCE_SECONDS:
+            return
+        self._last_pad_fire[slot] = now
+        actions.raise_window(slot)
 
     def _handle_pad_press(self, note: int) -> None:
         if note not in PAD_NOTES:
@@ -89,10 +101,6 @@ class MidiIO:
         if now - last < PAD_DEBOUNCE_SECONDS:
             return
         self._last_pad_fire[slot] = now
-
-        if self._shift_held:
-            actions.raise_window(slot)
-            return
 
         self.store.set_focus(slot)
         session = self.store.get(slot)
