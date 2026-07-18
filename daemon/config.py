@@ -64,9 +64,20 @@ PAD_DEBOUNCE_SECONDS = 0.4
 # server responds cleanly instead of the hook timing out first.
 PERMISSION_WAIT_TIMEOUT_SECONDS = 290
 
-# VS Code CLI command used to reuse+raise a window (daemon/actions.py). Falls
-# back to AppleScript app activation if this isn't on PATH.
+# VS Code CLI command used to reuse+raise a window (daemon/actions.py). A
+# launchd agent's PATH is just "/usr/bin:/bin:/usr/sbin:/sbin" — it doesn't
+# include /usr/local/bin, where the `code` shim actually lives (confirmed
+# live: shutil.which(VSCODE_CLI_COMMAND) returned None under launchd,
+# meaning `code -r` had never actually run — every raise was silently
+# falling all the way back to a blanket AppleScript activate, the one that
+# can't target a specific window). daemon/actions.py checks these absolute
+# paths too, not just PATH.
 VSCODE_CLI_COMMAND = "code"
+VSCODE_CLI_FALLBACK_PATHS = [
+    "/usr/local/bin/code",
+    "/opt/homebrew/bin/code",
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+]
 
 # System Events process name for VS Code, used by daemon/actions.py to target
 # the specific window for a repo (by basename match on its title) rather than

@@ -15,7 +15,22 @@ import subprocess
 from pathlib import Path
 
 from daemon import slots
-from daemon.config import TERM_PROGRAM_APP_NAMES, VSCODE_CLI_COMMAND, VSCODE_PROCESS_NAME
+from daemon.config import (
+    TERM_PROGRAM_APP_NAMES,
+    VSCODE_CLI_COMMAND,
+    VSCODE_CLI_FALLBACK_PATHS,
+    VSCODE_PROCESS_NAME,
+)
+
+
+def _find_code_cli() -> str | None:
+    found = shutil.which(VSCODE_CLI_COMMAND)
+    if found:
+        return found
+    # shutil.which uses this process's PATH, which under launchd is just
+    # "/usr/bin:/bin:/usr/sbin:/sbin" — it won't find /usr/local/bin/code.
+    # See daemon.config.VSCODE_CLI_FALLBACK_PATHS.
+    return next((p for p in VSCODE_CLI_FALLBACK_PATHS if Path(p).exists()), None)
 
 
 def _escape_applescript_string(s: str) -> str:
@@ -56,17 +71,29 @@ def _matches_repo(title: str, basename: str) -> bool:
 
 
 def _raise_vscode_window(repo: str) -> None:
-    if shutil.which(VSCODE_CLI_COMMAND):
-        subprocess.run([VSCODE_CLI_COMMAND, "-r", repo], capture_output=True, timeout=10)
+    # `code -r` is the mechanism that actually matters: it goes through VS
+    # Code's own IPC, so it can switch macOS Spaces to reach the right
+    # window — unlike System Events below, which (confirmed live) only ever
+    # sees windows on the *current* Space. It was silently never running at
+    # all under launchd until _find_code_cli()'s fallback paths were added
+    # (see daemon.config.VSCODE_CLI_FALLBACK_PATHS) — shutil.which() alone
+    # came up empty against launchd's minimal PATH, so every past "raise"
+    # was actually just the blanket activate below: a no-op if VS Code was
+    # already frontmost, or "bring forward whatever VS Code window was last
+    # used" otherwise. That matched the exact symptom reported live.
+    code_path = _find_code_cli()
+    if code_path:
+        subprocess.run([code_path, "-r", repo], capture_output=True, timeout=10)
 
-    # `code -r` reuses/reveals the window for `repo` but doesn't reliably
-    # bring it to the foreground when other VS Code windows are open
-    # (confirmed live — it can return success with the window still behind
-    # others, and doesn't switch which window is frontmost among several).
-    # Resolve the exact window title first (see _matches_repo) so the
-    # AppleScript raise call targets it by exact name — needs Accessibility
-    # permission on whatever runs the daemon, same requirement window_sweep
-    # used to have. Best-effort: multi-root workspace titles can still miss.
+    # `code -r` reveals the window but doesn't always bring it to the
+    # foreground on macOS (confirmed live — it can return success with the
+    # window still behind others). Try to target that specific window by
+    # exact title match via System Events for the "still behind others, but
+    # on the current Space" case (needs Accessibility permission on whatever
+    # runs the daemon — same requirement window_sweep used to have); if that
+    # doesn't find it (different Space, or no permission), `code -r` above
+    # is still doing the real work of switching Space/window, so a plain
+    # app-activate as a last nudge is enough rather than a hard requirement.
     basename = Path(repo).name
     title = next((t for t in _list_vscode_window_titles() if _matches_repo(t, basename)), None)
 
@@ -84,8 +111,6 @@ def _raise_vscode_window(repo: str) -> None:
         if result.returncode == 0:
             return
 
-    # Fell through: no Accessibility permission, or no window title matched.
-    # Just bring *some* VS Code window forward — better than nothing.
     subprocess.run(
         ["osascript", "-e", 'tell application "Visual Studio Code" to activate'],
         capture_output=True,
