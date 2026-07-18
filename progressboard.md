@@ -4,3 +4,4 @@ Short log, one entry per commit.
 
 - Scaffolded repo structure per §9 (daemon/, hooks/, opencode-plugin/, research/, tools/), venv + requirements.txt, README.
 - Added `tools/midi_monitor.py` (port lister + raw MIDI logger), `daemon/config.py`, `daemon/state.py` (SessionState + thread-safe SessionStore), `daemon/http_api.py` (`POST /event`, `GET /state`, stubbed `/permission-wait`). Verified end-to-end with a live uvicorn server + curl.
+- Added `hooks/post_event.sh` + `hooks/claude-settings.snippet.json` for Claude Code command hooks. Verified against current docs that hooks pass data via stdin JSON, not env vars like `$CLAUDE_TOOL_NAME` as CLAUDE.md's original sketch assumed — corrected accordingly. Tested the script end-to-end against a live hub.
