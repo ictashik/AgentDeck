@@ -8,13 +8,10 @@ struct PadGridView: View {
     @ObservedObject var hub: HubState
     @Binding var hoveredSlot: Int?
 
-    private let topRow = [5, 6, 7, 8]
-    private let bottomRow = [1, 2, 3, 4]
-
     var body: some View {
         VStack(spacing: ExpandedLayout.padGap) {
-            row(topRow)
-            row(bottomRow)
+            row(PadLayout.topRow)
+            row(PadLayout.bottomRow)
         }
     }
 

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuartzCore
 import SwiftUI
 
 /// One custom borderless panel whose *frame* moves between the pill/peek/
@@ -56,16 +57,30 @@ final class OverlayPanel: NSPanel {
             }
             .store(in: &cancellables)
 
-        reposition(surface: .pill, snapshot: hub.snapshot)
+        reposition(surface: .pill, snapshot: hub.snapshot, animated: false)
     }
 
     @objc private func screenParametersChanged() {
         guard let screen = NSScreen.main else { return }
         notch = NotchGeometry.current(for: screen)
-        reposition(surface: hub.surface, snapshot: hub.snapshot)
+        // A screen/resolution change repositions the notch itself — snap,
+        // don't animate; this isn't a pill/peek/expanded state transition.
+        reposition(surface: hub.surface, snapshot: hub.snapshot, animated: false)
     }
 
-    private func reposition(surface: SurfaceState, snapshot: HubSnapshot) {
+    /// Resizes/repositions the panel to match the given surface. Animated by
+    /// default: pop/collapse between pill, peek, and expanded uses the
+    /// window's own `animator()` proxy (Apple's documented mechanism for
+    /// smoothly animating an NSWindow's frame — see
+    /// developer.apple.com/documentation/appkit/nswindow/1419519-setframe)
+    /// rather than `setFrame(..., animate: false)`, which snapped instantly
+    /// and made the RootView's SwiftUI crossfade (Motion.peekTransition)
+    /// play inside a window that had already jumped to its new size,
+    /// producing the jump-cut/glitch this replaces. Same duration and an
+    /// equivalent easing curve as that SwiftUI animation, so the frame
+    /// resize and the content crossfade read as one motion, not two out of
+    /// sync ones.
+    private func reposition(surface: SurfaceState, snapshot: HubSnapshot, animated: Bool = true) {
         let size: CGSize
         switch surface {
         case .pill:
@@ -82,12 +97,23 @@ final class OverlayPanel: NSPanel {
         let originY = notch.frame.minY - size.height
 
         let newFrame = NSRect(x: originX, y: originY, width: size.width, height: size.height)
-        setFrame(newFrame, display: true, animate: false)
 
         // §2.1/§2.3: opaque + no shadow while fused to the notch; the
-        // expanded panel is allowed to look like a floating panel.
+        // expanded panel is allowed to look like a floating panel. Flipped
+        // before the resize starts (not after) so the shadow is already
+        // correct for whichever size the window is animating towards.
         hasShadow = surface == .expanded
         isOpaque = false
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Motion.peekTransition
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.animator().setFrame(newFrame, display: true)
+            }
+        } else {
+            setFrame(newFrame, display: true, animate: false)
+        }
 
         updateOutsideClickMonitor(active: surface == .expanded)
     }

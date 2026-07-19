@@ -17,7 +17,9 @@ enum Motion {
     static let breatheRange: ClosedRange<Double> = 0.6...1.0
 
     /// "Peek transition: quick, mechanical expand/collapse (~150-200ms), not
-    /// bouncy or playful."
+    /// bouncy or playful." Drives both RootView's SwiftUI content crossfade
+    /// and OverlayPanel's animated window-frame resize (same duration/curve
+    /// on both, so they read as one motion — see OverlayPanel.reposition).
     static let peekTransition: Double = 0.175
 
     /// How long an automatic peek stays up before collapsing back to the
