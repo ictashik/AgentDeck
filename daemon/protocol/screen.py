@@ -8,9 +8,9 @@ full writeup, including why blindly guessing SysEx function codes against the re
 unit is riskier than it sounds (a documented warning about triggering firmware
 update mode from unrelated protocol research on this same device).
 
-Per CLAUDE.md §3/§8, this is downgraded to a stretch goal. The macOS notification
-banner (rumps.notification, see daemon/menubar.py) is the primary "glance"
-mechanism and does not depend on this module at all.
+Per CLAUDE.md §3/§8, this is downgraded to a stretch goal. The SwiftUI notch
+widget's peek (widget/, see its automatic-peek-on-actionable-state behavior)
+is the primary "glance" mechanism now and does not depend on this module at all.
 """
 
 from __future__ import annotations

@@ -4,19 +4,20 @@ specifically for both input and output — transport CCs and pad LED control
 only work on that port (live-verified, see research/NOTES.md), not the plain
 MIDI Port.
 
-No TTY, no tmux, no keystroke injection — this only ever calls into
-daemon.http_api (resolve a pending permission), daemon.actions (raise the
-session's app window), and daemon.state (focus/read session state).
+No TTY, no tmux, no keystroke injection, no notifications — this only ever
+calls into daemon.http_api (resolve a pending permission), daemon.actions
+(raise the session's app window), and daemon.state (focus/read session
+state, including the midi_connected flag for the SwiftUI widget's connection
+glyph). All UI — including the peek/notification-equivalent — lives in the
+separate widget/ app now; this module is headless.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from pathlib import Path
 
 import mido
-import rumps
 
 from daemon import actions, http_api, pending_claim, slots
 from daemon.config import (
@@ -51,7 +52,6 @@ class MidiIO:
         self._stop = threading.Event()
         self._last_pad_fire: dict[int, float] = {}
         self._last_sent_state: dict[int, str] = {}
-        self._last_notified_pending_cwd: str | None = None
         self._unbind_armed_until: float = 0.0
 
     def stop(self) -> None:
@@ -62,15 +62,20 @@ class MidiIO:
         out_name = _find_daw_port_name(mido.get_output_names())
         if in_name is None or out_name is None:
             print(f"MidiIO: no '{PAD_LED_PORT_HINT}' port found — device not connected? Skipping MIDI I/O.")
+            self.store.set_midi_connected(False)
             return
 
         with mido.open_input(in_name) as inport, mido.open_output(out_name) as outport:
             self._outport = outport
-            while not self._stop.is_set():
-                for msg in inport.iter_pending():
-                    self._handle_message(msg)
-                self._refresh_pad_colors()
-                time.sleep(POLL_INTERVAL_SECONDS)
+            self.store.set_midi_connected(True)
+            try:
+                while not self._stop.is_set():
+                    for msg in inport.iter_pending():
+                        self._handle_message(msg)
+                    self._refresh_pad_colors()
+                    time.sleep(POLL_INTERVAL_SECONDS)
+            finally:
+                self.store.set_midi_connected(False)
 
     def _handle_message(self, msg: mido.Message) -> None:
         if msg.type == "note_on" and msg.channel == PAD_CHANNEL and msg.velocity > 0:
@@ -122,38 +127,17 @@ class MidiIO:
             return
 
         self.store.set_focus(slot)
-        session = self.store.get(slot)
-        if session is not None:
-            label = session.cwd.rsplit("/", 1)[-1] if session.cwd else f"slot {slot}"
-            command = session.detail or session.state
-            rumps.notification(
-                title=f"AgentDeck — {label}",
-                subtitle=session.state,
-                message=f"{command} — allow?" if session.state == "waiting_permission" else command,
-            )
 
     def _handle_claim_press(self, slot: int) -> None:
         claimed_cwd = pending_claim.claim(slot)
         if claimed_cwd is None:
             return  # unbound pad pressed but nothing is actually pending — no-op
         self.store.set_focus(slot)
-        rumps.notification(
-            title="AgentDeck",
-            subtitle=f"Pad {slot} assigned",
-            message=Path(claimed_cwd).name,
-        )
 
     def _handle_unbind_press(self, slot: int) -> None:
-        binding = slots.get(slot)
-        label = Path(binding["repo"]).name if binding else f"slot {slot}"
         actions.raise_window(slot)  # raise first — needs the binding, which unassign below removes
         slots.unassign(slot)
         self.store.reset(slot)
-        rumps.notification(
-            title="AgentDeck",
-            subtitle=f"Pad {slot} unassigned",
-            message=label,
-        )
 
     def _handle_cc_press(self, control: int) -> None:
         focused = self.store.get_focus()
@@ -169,7 +153,7 @@ class MidiIO:
                 http_api.resolve_permission(focused, "deny")
             self._unbind_armed_until = time.monotonic() + UNBIND_ARM_SECONDS
         elif control == CC_ENCODER_PRESS:
-            self._expand_focused()
+            self._handle_encoder_press()
         # else: unmapped in the MVP (Undo, Tap Tempo, Bank -/+, knobs) — ignored.
 
     def _handle_encoder_turn(self, value: int) -> None:
@@ -182,21 +166,13 @@ class MidiIO:
             return
         self.store.set_focus(next_slot)
 
-    def _expand_focused(self) -> None:
+    def _handle_encoder_press(self) -> None:
+        # "Expand" is now a click gesture in the SwiftUI widget (widget/) —
+        # MIDI has no way to open a window in another process. Repurposed:
+        # raise the focused slot's app window, same as Shift+pad.
         focused = self.store.get_focus()
-        if focused is None:
-            return
-        session = self.store.get(focused)
-        if session is None:
-            return
-        # rumps doesn't expose a way to programmatically open the menu bar
-        # dropdown (documented stretch goal in CLAUDE.md §12) — an alert with
-        # full detail is the pragmatic MVP stand-in.
-        rumps.notification(
-            title=f"Slot {focused} detail",
-            subtitle=session.state,
-            message=f"{session.cwd or ''}\n{session.detail or ''}".strip(),
-        )
+        if focused is not None:
+            actions.raise_window(focused)
 
     def _refresh_pad_colors(self) -> None:
         if self.store.is_loading():
@@ -215,15 +191,6 @@ class MidiIO:
             return
 
         pending_cwd = pending_claim.current_pending_cwd()
-        if pending_cwd != self._last_notified_pending_cwd:
-            if pending_cwd is not None:
-                rumps.notification(
-                    title="New Claude Code Session Detected",
-                    subtitle=Path(pending_cwd).name,
-                    message="Click a blinking pad to assign it!",
-                )
-            self._last_notified_pending_cwd = pending_cwd
-
         claimable = set(slots.free_slots()) if pending_cwd is not None else set()
         bound_slots = {int(s) for s in slots.load()}
 

@@ -7,26 +7,38 @@ slot, and daemon/pending_claim.py handles the interactive "no binding yet,
 blink the free pads until one is claimed" flow.
 
 - POST /event: lifecycle updates from command hooks (post_event.sh).
-- GET /state: read-only, used by the menu bar and for debugging.
+- GET /state: read-only snapshot, used by the SwiftUI widget (widget/) and
+  for debugging.
+- GET /events: same snapshot, pushed as Server-Sent Events whenever it
+  changes — the widget's primary channel, since the daemon is headless now
+  and has no other way to notify a separate process of a state change.
 - POST /permission-wait: the Tier 1 blocking hook. Verified against
   code.claude.com/docs/en/hooks — the response schema is a nested
   hookSpecificOutput.decision.behavior, NOT a flat {"decision": "allow"} as an
   earlier draft of this project assumed.
+- POST /resolve, /claim, /unbind, /raise, /focus: the widget's mutating
+  actions — thin HTTP wrappers around functions that were previously only
+  ever called in-process by daemon/midi_io.py (and the now-deleted rumps
+  menubar.py) since everything used to live in one process. Now that the
+  widget is a separate process, these need a real HTTP surface.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
 import time
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from daemon import actions, pending_claim, slots
 from daemon.auth import AUTH_ENABLED, get_or_create_token
 from daemon.config import PERMISSION_WAIT_TIMEOUT_SECONDS
-from daemon.state import VALID_STATES, SessionStore
+from daemon.state import VALID_STATES, SessionState, SessionStore
 
 app = FastAPI(title="AgentDeck hub")
 
@@ -72,6 +84,29 @@ def post_event(payload: EventPayload, x_agentdeck_token: str | None = Header(def
     return {"ok": True, "slot": updated.slot, "state": updated.state}
 
 
+def _slot_payload(session: SessionState) -> dict[str, Any]:
+    binding = slots.get(session.slot)
+    return {
+        "slot": session.slot,
+        "agent": session.agent,
+        "state": session.state,
+        "detail": session.detail,
+        "cwd": session.cwd,
+        "updated_at": session.updated_at,
+        "label": binding["label"] if binding else None,
+        "repo": binding["repo"] if binding else None,
+    }
+
+
+def _snapshot(store: SessionStore) -> dict[str, Any]:
+    return {
+        "focused_slot": store.get_focus(),
+        "midi_connected": store.is_midi_connected(),
+        "pending_claim_cwd": pending_claim.current_pending_cwd(),
+        "slots": [_slot_payload(s) for s in store.all()],
+    }
+
+
 @app.get("/state")
 def get_state(slot: int | None = None) -> dict[str, Any]:
     if store is None:
@@ -81,17 +116,25 @@ def get_state(slot: int | None = None) -> dict[str, Any]:
         session = store.get(slot)
         if session is None:
             raise HTTPException(status_code=404, detail=f"no such slot: {slot}")
-        return {"slot": session.slot, "agent": session.agent, "state": session.state,
-                "detail": session.detail, "cwd": session.cwd, "updated_at": session.updated_at}
+        return _slot_payload(session)
 
-    return {
-        "focused_slot": store.get_focus(),
-        "slots": [
-            {"slot": s.slot, "agent": s.agent, "state": s.state, "detail": s.detail,
-             "cwd": s.cwd, "updated_at": s.updated_at}
-            for s in store.all()
-        ],
-    }
+    return _snapshot(store)
+
+
+@app.get("/events")
+async def get_events() -> StreamingResponse:
+    async def gen():
+        if store is None:
+            return
+        last: str | None = None
+        while True:
+            serialized = json.dumps(_snapshot(store))
+            if serialized != last:
+                yield f"data: {serialized}\n\n"
+                last = serialized
+            await asyncio.sleep(0.12)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 def _command_summary(tool_input: dict) -> str | None:
@@ -188,3 +231,63 @@ def resolve_permission(slot: int, decision: str) -> bool:
 def has_pending_permission(slot: int) -> bool:
     with _pending_lock:
         return slot in _pending_permissions
+
+
+class SlotPayload(BaseModel):
+    slot: int
+
+
+class ResolvePayload(BaseModel):
+    slot: int
+    decision: str
+
+
+@app.post("/resolve")
+def post_resolve(payload: ResolvePayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """The widget's Accept/Allow-Always/Deny actions — the same in-process
+    mechanism daemon/midi_io.py's transport-CC handling already uses, just
+    reachable over HTTP now that the widget is a separate process."""
+    require_token(x_agentdeck_token)
+    if payload.decision not in ("allow", "allow_always", "deny"):
+        raise HTTPException(status_code=400, detail=f"unknown decision: {payload.decision}")
+    return {"ok": resolve_permission(payload.slot, payload.decision)}
+
+
+@app.post("/claim")
+def post_claim(payload: SlotPayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """The widget's claim-a-pending-repo action, mirroring
+    daemon/midi_io.py's _handle_claim_press (minus the notification, which
+    moved to the widget)."""
+    require_token(x_agentdeck_token)
+    cwd = pending_claim.claim(payload.slot)
+    return {"ok": cwd is not None, "cwd": cwd}
+
+
+@app.post("/unbind")
+def post_unbind(payload: SlotPayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """The widget's unbind action, mirroring daemon/midi_io.py's
+    _handle_unbind_press (Record+Pad on hardware) minus the notification."""
+    require_token(x_agentdeck_token)
+    if store is None:
+        raise HTTPException(status_code=503, detail="store not initialized")
+    actions.raise_window(payload.slot)  # raise first — needs the binding, which unassign below removes
+    slots.unassign(payload.slot)
+    store.reset(payload.slot)
+    return {"ok": True}
+
+
+@app.post("/raise")
+def post_raise(payload: SlotPayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """The widget's "go to window" action (Tier 2 questions, or any row)."""
+    require_token(x_agentdeck_token)
+    return {"ok": actions.raise_window(payload.slot)}
+
+
+@app.post("/focus")
+def post_focus(payload: SlotPayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Row-click in the widget's expanded view sets focus, same as a pad press."""
+    require_token(x_agentdeck_token)
+    if store is None:
+        raise HTTPException(status_code=503, detail="store not initialized")
+    store.set_focus(payload.slot)
+    return {"ok": True}

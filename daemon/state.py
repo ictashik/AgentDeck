@@ -70,6 +70,10 @@ class SessionStore:
         # HTTP server, MIDI ports, the initial VS Code window sweep). All pads
         # blink while this is set — see midi_io._refresh_pad_colors.
         self._loading = True
+        # Whether the MPK's DAW Port is currently open (daemon/midi_io.py sets
+        # this) — exposed over HTTP so the SwiftUI widget's connection glyph
+        # can reflect it without the widget needing to touch MIDI itself.
+        self._midi_connected = False
 
     def update(
         self,
@@ -135,3 +139,11 @@ class SessionStore:
     def set_loading(self, loading: bool) -> None:
         with self._lock:
             self._loading = loading
+
+    def is_midi_connected(self) -> bool:
+        with self._lock:
+            return self._midi_connected
+
+    def set_midi_connected(self, connected: bool) -> None:
+        with self._lock:
+            self._midi_connected = connected
