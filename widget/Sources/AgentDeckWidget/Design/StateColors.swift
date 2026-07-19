@@ -1,9 +1,19 @@
 import SwiftUI
 
-/// Canonical color system, transcribed verbatim from the notch-widget design
-/// doc §4 — this is the single source of truth shared with the physical pad
-/// LEDs (daemon/protocol/pad_colors.py). Never introduce a color here that
-/// doesn't also correspond to a documented state.
+/// Canonical color system. Started as a verbatim transcription of the
+/// notch-widget design doc §4, but §4's `idle`/`waiting_permission`/
+/// `waiting_question` hexes (slate gray, orange, violet) assumed colors the
+/// real hardware turned out not to support: daemon/protocol/pad_colors.py's
+/// module docstring found GREY indistinguishable from OFF on this unit, and
+/// no confirmed ORANGE/VIOLET velocity exists at all — so the daemon's
+/// STATE_COLORS silently substitutes WHITE for idle and reuses the *same*
+/// AMBER/BLUE as running_tool/thinking for waiting_permission/
+/// waiting_question (distinguished only by blink motion, not hue). This
+/// table now mirrors those substitutions instead of the pre-hardware design
+/// doc, restoring "hardware/software color parity" (§1) — screen and pads
+/// showing different colors for the same state was a live-reported bug.
+/// design.md itself is left as-is per its own note: it's the historical
+/// record, not edited to match.
 enum SlotColor {
     /// `waiting_input` has no entry in the design doc's §4 table (a gap the
     /// doc itself left open). Resolved here as running_tool's hue at reduced
@@ -13,20 +23,20 @@ enum SlotColor {
     /// waiting_permission/waiting_question are accept/reject-resolvable.
     static func hex(for state: String) -> String {
         switch state {
-        case "idle": return "#4A515C"
+        case "idle": return "#FFFFFF"
         case "thinking": return "#4F8CFF"
         case "running_tool": return "#FFB020"
-        case "waiting_permission": return "#FF9F0A"
-        case "waiting_question": return "#BF7BFF"
+        case "waiting_permission": return "#FFB020"
+        case "waiting_question": return "#4F8CFF"
         case "waiting_input": return "#FFB020"
         case "done": return "#32D74B"
         case "error": return "#FF453A"
-        default: return "#4A515C"
+        default: return "#FFFFFF"
         }
     }
 
     static func opacity(for state: String) -> Double {
-        state == "waiting_input" ? 0.6 : 1.0
+        (state == "waiting_input" || state == "idle") ? 0.6 : 1.0
     }
 
     static func color(for state: String) -> Color {
