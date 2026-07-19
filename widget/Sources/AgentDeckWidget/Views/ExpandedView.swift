@@ -1,37 +1,26 @@
 import SwiftUI
 
-/// §2.3: the full session list. Standard macOS vibrancy is allowed here
-/// (only here) — once expanded, it's openly a floating panel and the notch
-/// illusion is intentionally broken.
+/// §2.3, reinterpreted per a follow-up prompt: a mini display + 4×2 pad
+/// grid mirroring the physical MPK's own layout, instead of a session list.
+/// Standard macOS vibrancy is allowed here (only here) — once expanded,
+/// it's openly a floating panel and the notch illusion is intentionally
+/// broken.
 struct ExpandedView: View {
     @ObservedObject var hub: HubState
+    @State private var hoveredSlot: Int?
 
-    private var freeSlots: [Int] {
-        hub.snapshot.slots.filter { $0.repo == nil }.map(\.slot)
+    private var displaySlot: Int {
+        hoveredSlot ?? hub.snapshot.focusedSlot ?? 1
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            if let pending = hub.snapshot.pendingClaimCwd {
-                ClaimRowView(cwd: pending, freeSlots: freeSlots) { slot in
-                    hub.claim(slot: slot)
-                }
-                Divider().opacity(0.2)
-            }
-
-            ForEach(hub.snapshot.slots) { slot in
-                SlotRowView(
-                    slot: slot,
-                    isFocused: hub.snapshot.focusedSlot == slot.slot,
-                    onResolve: { decision in hub.resolve(slot: slot.slot, decision: decision) },
-                    onRaise: { hub.raiseWindow(slot: slot.slot) },
-                    onFocus: { hub.focus(slot: slot.slot) },
-                    onUnbind: { hub.unbind(slot: slot.slot) }
-                )
-            }
+        VStack(spacing: ExpandedLayout.sectionGap) {
+            DisplayView(snapshot: hub.snapshot, displaySlot: displaySlot)
+            PadGridView(hub: hub, hoveredSlot: $hoveredSlot)
+            TransportRowView(hub: hub)
         }
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(ExpandedLayout.outerPadding)
+        .frame(width: ExpandedLayout.panelWidth, height: ExpandedLayout.panelHeight)
         .background(.regularMaterial)
         .background(SlotColor.backgroundBottom.opacity(0.4))
     }

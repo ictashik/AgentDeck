@@ -121,7 +121,6 @@ final class HubState: ObservableObject {
 
     func unbind(slot: Int) {
         Task { try? await client.unbind(slot: slot) }
-        collapse()
     }
 
     func raiseWindow(slot: Int) {

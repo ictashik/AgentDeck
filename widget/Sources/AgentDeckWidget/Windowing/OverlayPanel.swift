@@ -9,11 +9,10 @@ import SwiftUI
 final class OverlayPanel: NSPanel {
     static let pillHeight: CGFloat = 22
     static let peekHeight: CGFloat = 44
-    static let expandedWidth: CGFloat = 260
-    static let claimRowHeight: CGFloat = 22
-    static let baseRowHeight: CGFloat = 22
-    static let actionableExtraHeight: CGFloat = 24
-    static let expandedVerticalPadding: CGFloat = 12
+    // Expanded size is fixed now (display + 4x2 pad grid + transport row,
+    // not a variable-length session list) — see Design/ExpandedLayout.swift,
+    // shared with the SwiftUI views themselves so the window always matches
+    // its content exactly with no fittingSize query needed.
 
     private let hub: HubState
     private var notch: NotchRect
@@ -74,7 +73,7 @@ final class OverlayPanel: NSPanel {
         case .peek:
             size = CGSize(width: max(notch.frame.width, 160), height: Self.peekHeight)
         case .expanded:
-            size = CGSize(width: Self.expandedWidth, height: expandedHeight(for: snapshot))
+            size = CGSize(width: ExpandedLayout.panelWidth, height: ExpandedLayout.panelHeight)
         }
 
         let originX = (surface == .expanded)
@@ -91,20 +90,6 @@ final class OverlayPanel: NSPanel {
         isOpaque = false
 
         updateOutsideClickMonitor(active: surface == .expanded)
-    }
-
-    private func expandedHeight(for snapshot: HubSnapshot) -> CGFloat {
-        var height = Self.expandedVerticalPadding
-        if snapshot.pendingClaimCwd != nil {
-            height += Self.claimRowHeight
-        }
-        for slot in snapshot.slots {
-            height += Self.baseRowHeight
-            if slot.isActionable {
-                height += Self.actionableExtraHeight
-            }
-        }
-        return height
     }
 
     private func updateOutsideClickMonitor(active: Bool) {

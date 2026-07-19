@@ -57,16 +57,28 @@ setup):
     is inherited down the process tree, so it goes stale: a VS Code session whose app was ever
     launched from a terminal (e.g. `code .`) would inherit that terminal's `$TERM_PROGRAM` and
     wrongly report itself as a terminal, which is exactly the bug that surfaced once this
-    shipped — `daemon/actions.raise_window()` was activating a terminal instead of running
-    `code -r`. The detected app is forwarded to `/event` (payload field still named
+    shipped — `daemon/actions.raise_window()` was activating a terminal instead of the correct
+    VS Code window. The detected app is forwarded to `/event` (payload field still named
     `term_program`) and stored on the binding (`daemon/slots.py`'s `app` field);
-    `raise_window()` uses `code -r` + AppleScript activate for `vscode` — this covers both the
-    extension and VS Code's own integrated terminal — or a plain AppleScript activate against
+    `raise_window()` targets the specific VS Code window for `vscode` via System Events (exact
+    title match, then `AXRaise` — see below), or a plain AppleScript activate against
     `daemon.config.TERM_PROGRAM_APP_NAMES` (currently matches `vscode` and `Apple_Terminal`,
     live-verify/extend `detect_app`'s path matches and this map together as needed;
     unrecognized values are deliberately *not* activated) for anything else. A plain terminal
-    can only be brought to the front as an app, not to the specific tab/window for that repo —
-    there's no `code -r`-equivalent target for that.
+    can only be brought to the front as an app, not to the specific tab/window for that repo.
+  - **`code -r` was tried for VS Code window-raising and then removed entirely after a live
+    incident.** `-r`/`--reuse-window` does not mean "reuse a window already showing this repo"
+    — it means "reuse whichever window was last active, regardless of what it's currently
+    showing." With repo A's window focused (a Tier-2 question pending on it) and the user
+    raising repo B's window, `code -r B` silently repointed repo A's own window at B instead of
+    leaving it alone — effectively destroying the window the user actually needed, with no
+    warning. `daemon/actions.py` now targets an existing window purely via System Events (exact
+    title match on `_matches_repo`'s trailing-segment parse, then the `AXRaise` accessibility
+    action) and never shells out to `code` at all — a bound slot always implies a window
+    already exists for it, so `raise_window` is never responsible for opening a new one. The
+    known tradeoff: if the target window is on a different macOS Space (System Events can only
+    enumerate windows on the *current* Space), this falls back to a plain app-activate that
+    won't switch Spaces — a real but non-destructive limitation, unlike the alternative.
 - **The interaction flow in §1 gained a second tier.** The original flow (Accept/Reject via two
   transport buttons) only covers permission prompts. `AskUserQuestion` calls can't be answered
   by the deck at all (no programmatic answer path exists) — those get their own state
@@ -112,6 +124,19 @@ setup):
     one snapshot shape that also includes `midi_connected` (new `SessionStore` flag,
     set by `daemon/midi_io.py` when the DAW Port opens/closes) and each slot's
     `label`/`repo` from `daemon/slots.py` (not on `SessionState` itself).
+  - **The expanded surface (§2.3 of `widget/design.md`) is a mini display + 4×2 pad grid,
+    not a session list**, per a follow-up prompt overriding the design doc's original
+    "one line per session" spec. The grid mirrors the physical MPK's own pad numbering
+    (row 1 = pads 5-8, row 2 = pads 1-4, standard Akai MPC-style layout) — click a pad to
+    focus it, double-click to raise its window, right-click to unbind, hover/click to
+    drive the mini display above the grid (slot + abbreviated command on one line,
+    repo name truncated to a fixed-width top-right slot so the message always knows its
+    available room, full command revealed in blue on hover). Transport buttons below the
+    grid are real Play/Loop/Record icons (`SF Symbols`), colored (green/grey/red) and
+    blinking at the same fast-blink cadence as an actionable pad when the focused slot
+    actually has a decision pending — not always-visible text buttons. `widget/design.md`
+    itself (the uploaded design doc) is checked into the repo verbatim for reference, not
+    edited to match — this bullet is the record of where the actual build diverged from it.
   - **All `rumps.notification(...)` calls in `daemon/midi_io.py` were deleted, not
     replaced with anything else Python-side.** The widget's own peek (automatic on a
     slot entering an actionable state, plus hover-to-peek, cycling through multiple

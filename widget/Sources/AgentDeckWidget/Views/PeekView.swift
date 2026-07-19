@@ -20,7 +20,7 @@ struct PeekView: View {
             .padding(.top, 6)
 
             if let peeked {
-                Text("\(peeked.slot)  \(peeked.displayName)  \(statusPhrase(for: peeked))")
+                Text("\(peeked.slot)  \(peeked.displayName)  \(peeked.statusPhrase)")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
@@ -30,18 +30,5 @@ struct PeekView: View {
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SlotColor.backgroundBottom)
-    }
-
-    /// A 2-4 word status phrase (§2.2), preferring the hook-supplied detail
-    /// when there is one.
-    private func statusPhrase(for slot: SlotState) -> String {
-        switch slot.state {
-        case "waiting_permission":
-            return slot.detail.map { "allow \($0)?" } ?? "needs permission"
-        case "waiting_question":
-            return slot.detail ?? "has a question"
-        default:
-            return slot.state
-        }
     }
 }

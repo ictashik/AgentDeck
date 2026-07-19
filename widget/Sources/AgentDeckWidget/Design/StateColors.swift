@@ -41,6 +41,15 @@ enum SlotColor {
     /// structure."
     static let chrome = Color.white.opacity(0.35)
     static let chromeStrong = Color.white.opacity(0.6)
+
+    /// Transport button colors (TransportRowView) — a distinct vocabulary
+    /// from the §4 state table, mirroring the conventional
+    /// play/loop/record affordance rather than session state, so reusing
+    /// green/red here doesn't collide with §4's "no state shares a hue"
+    /// rule (these aren't state colors at all).
+    static let transportAllow = Color(hex: "#32D74B")
+    static let transportDeny = Color(hex: "#FF453A")
+    static let transportNeutral = Color.white.opacity(0.75)
 }
 
 extension Color {
