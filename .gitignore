@@ -8,3 +8,8 @@ venv/
 # Per-repo local settings written by tools/assign_slot.py — contains the
 # anti-spoofing token (daemon/auth.py), never commit this.
 .claude/settings.local.json
+
+# SwiftUI widget build artifacts (widget/build.sh output + SPM's own cache).
+widget/.build/
+widget/build/
+widget/.swiftpm/

@@ -90,6 +90,56 @@ setup):
   (`daemon/pending_claim.py`), with a notification prompting the click. `tools/assign_slot.py`
   still exists for pre-pinning a repo to a specific slot, but it's optional now, not required
   setup. One-time global setup (token + hooks) is `tools/setup_global_hooks.py`.
+- **The rumps menu bar app is gone. The daemon is headless; a native SwiftUI app
+  (`widget/`) is the sole UI now**, per an explicit follow-up prompt with its own design
+  doc (colors/motion/density — see `widget/`'s module docs, which transcribe it). This
+  supersedes §4's process diagram (menubar.py no longer exists; the daemon is just the MIDI
+  I/O thread + FastAPI hub, with uvicorn running directly on the main thread — see
+  `daemon/main.py`) and §12/§15's "MenuBarExtra... fine v2 polish" framing (the actual
+  result isn't a `MenuBarExtra` at all — a custom borderless `NSPanel` positioned via
+  `NSScreen.auxiliaryTopLeftArea`/`auxiliaryTopRightArea`, since `MenuBarExtra` can't be
+  positioned/sized to span the physical notch or hover-trigger a peek).
+  - **The widget is a complete standalone interface, not just a mirror.** Every
+    interaction the pads support — accept/deny/allow-always, claim a pending repo,
+    unbind a slot, raise a session's window — also works from the widget with the MPK
+    fully unplugged. This required a real HTTP surface for actions that used to only
+    ever be called in-process by the same rumps/MIDI process: `daemon/http_api.py`
+    gained `POST /resolve`, `/claim`, `/unbind`, `/raise`, `/focus` (all token-required,
+    thin wrappers around functions daemon/midi_io.py already called directly), plus a
+    `GET /events` Server-Sent-Events stream (poll-and-diff against the existing
+    lock-guarded `SessionStore`, ~120ms interval, no pub/sub needed) so the widget gets
+    near-instant push updates instead of polling `GET /state`. Both endpoints now share
+    one snapshot shape that also includes `midi_connected` (new `SessionStore` flag,
+    set by `daemon/midi_io.py` when the DAW Port opens/closes) and each slot's
+    `label`/`repo` from `daemon/slots.py` (not on `SessionState` itself).
+  - **All `rumps.notification(...)` calls in `daemon/midi_io.py` were deleted, not
+    replaced with anything else Python-side.** The widget's own peek (automatic on a
+    slot entering an actionable state, plus hover-to-peek, cycling through multiple
+    actionable slots on a fixed interval if several are waiting at once) is the
+    notification now — deliberately no native `UserNotifications` banner either,
+    matching the design doc's explicit "pull, not push" anti-pattern list. The push
+    encoder's press action, which used to fire an alert-notification stand-in for
+    "expand," now raises the focused slot's window instead (same as Shift+pad) — MIDI
+    has no way to open a window in a separate process, and "expand" is a widget-side
+    click gesture now.
+  - **Packaging: Swift Package Manager, not a hand-authored `.xcodeproj`** (fragile
+    pbxproj format) — `widget/build.sh` compiles via `swift build -c release` and wraps
+    the binary into a real `.app` bundle with a hand-written `Info.plist`
+    (`LSUIElement=true`). The package still opens directly in Xcode (File → Open on
+    `widget/`) for interactive debugging. "Launch at Login" is `SMAppService`,
+    toggled from the widget's own right-click menu — no second launchd plist alongside
+    `tools/install_launchd.py`'s.
+  - **Two real bugs found via live debugging, both in `widget/Sources/AgentDeckWidget/Networking/HubClient.swift`**,
+    worth knowing about if `/events` streaming ever looks broken again: (1)
+    `URLSessionConfiguration.timeoutIntervalForRequest` governs the gap between
+    successive bytes, not total connection duration — the default 10s used for the
+    mutating POST calls was killing the long-lived SSE connection every time nothing
+    changed for a while (which is the normal case), fixed by giving the streaming
+    connection its own session with `.infinity`. (2) `URLSession.AsyncBytes.lines`
+    does not reliably surface the blank line that terminates an SSE frame per spec —
+    waiting for it silently starved the whole pipeline of ever decoding a frame; fixed
+    by decoding directly off each `data:` line instead, which is valid here since
+    `daemon/http_api.py`'s `json.dumps` output is always single-line.
 
 ## 1. What this is
 
