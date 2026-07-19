@@ -31,11 +31,18 @@ struct PadButtonView: View {
                 .padding(4)
         }
         .contentShape(RoundedRectangle(cornerRadius: 6))
-        // SwiftUI disambiguates single vs. double tap automatically when
-        // both are attached to the same view (a short delay on the single
-        // tap to see if a second one follows) — no manual timing needed.
-        .onTapGesture(count: 2, perform: onDoubleTap)
-        .onTapGesture(count: 1, perform: onTap)
+        // Two independent `.onTapGesture(count:)` modifiers on the same view
+        // don't reliably disambiguate single vs. double click on macOS (they
+        // do on iOS) — the double-tap handler could go unfired, live-reported
+        // as "double tap to focus window is not working." `.exclusively(
+        // before:)` is the documented-reliable pattern: the double-tap
+        // gesture gets first refusal within the system's multi-click
+        // interval, falling through to single-tap only if it doesn't
+        // complete.
+        .gesture(
+            TapGesture(count: 2).onEnded(onDoubleTap)
+                .exclusively(before: TapGesture(count: 1).onEnded(onTap))
+        )
         .onHover(perform: onHover)
         .contextMenu {
             if slot.repo != nil {
