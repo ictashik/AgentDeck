@@ -1,36 +1,23 @@
 """Side-effecting actions the MIDI/HTTP threads trigger: window-raising for
 Tier 2 (CLAUDE.md's "Expand"/Shift+pad step), and writing a conservative
 allow-rule for Tier 1's "Loop = allow always" button. No TTY, no tmux, no
-keystroke injection. "Raise the window" targets the specific VS Code window
-for a repo (via System Events, by title basename) when several are open, and
-falls back to a plain app-activate for non-VS-Code sessions or when the
-specific-window match fails.
+keystroke injection, and — deliberately — no `code` CLI invocation of any
+kind. "Raise the window" targets the specific VS Code window for a repo via
+System Events (exact title match, then AXRaise) only. See
+_raise_vscode_window's docstring for why `code -r` was removed entirely
+after a live incident: it doesn't reuse a window already showing the target
+repo, it reuses whichever window was *last active*, so it silently
+repointed an unrelated, currently-focused window at the wrong repo.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
 from daemon import slots
-from daemon.config import (
-    TERM_PROGRAM_APP_NAMES,
-    VSCODE_CLI_COMMAND,
-    VSCODE_CLI_FALLBACK_PATHS,
-    VSCODE_PROCESS_NAME,
-)
-
-
-def _find_code_cli() -> str | None:
-    found = shutil.which(VSCODE_CLI_COMMAND)
-    if found:
-        return found
-    # shutil.which uses this process's PATH, which under launchd is just
-    # "/usr/bin:/bin:/usr/sbin:/sbin" — it won't find /usr/local/bin/code.
-    # See daemon.config.VSCODE_CLI_FALLBACK_PATHS.
-    return next((p for p in VSCODE_CLI_FALLBACK_PATHS if Path(p).exists()), None)
+from daemon.config import TERM_PROGRAM_APP_NAMES, VSCODE_PROCESS_NAME
 
 
 def _escape_applescript_string(s: str) -> str:
@@ -70,46 +57,40 @@ def _matches_repo(title: str, basename: str) -> bool:
     return title.strip() == basename
 
 
-def _raise_vscode_window(repo: str) -> None:
-    # `code -r` is the mechanism that actually matters: it goes through VS
-    # Code's own IPC, so it can switch macOS Spaces to reach the right
-    # window — unlike System Events below, which (confirmed live) only ever
-    # sees windows on the *current* Space. It was silently never running at
-    # all under launchd until _find_code_cli()'s fallback paths were added
-    # (see daemon.config.VSCODE_CLI_FALLBACK_PATHS) — shutil.which() alone
-    # came up empty against launchd's minimal PATH, so every past "raise"
-    # was actually just the blanket activate below: a no-op if VS Code was
-    # already frontmost, or "bring forward whatever VS Code window was last
-    # used" otherwise. That matched the exact symptom reported live.
-    code_path = _find_code_cli()
-    if code_path:
-        subprocess.run([code_path, "-r", repo], capture_output=True, timeout=10)
+def _axraise_vscode_window(title: str) -> bool:
+    escaped_title = _escape_applescript_string(title)
+    script = f'''
+    tell application "System Events"
+        tell process "{VSCODE_PROCESS_NAME}"
+            perform action "AXRaise" of (first window whose name is "{escaped_title}")
+            set frontmost to true
+        end tell
+    end tell
+    '''
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+    return result.returncode == 0
 
-    # `code -r` reveals the window but doesn't always bring it to the
-    # foreground on macOS (confirmed live — it can return success with the
-    # window still behind others). Try to target that specific window by
-    # exact title match via System Events for the "still behind others, but
-    # on the current Space" case (needs Accessibility permission on whatever
-    # runs the daemon — same requirement window_sweep used to have); if that
-    # doesn't find it (different Space, or no permission), `code -r` above
-    # is still doing the real work of switching Space/window, so a plain
-    # app-activate as a last nudge is enough rather than a hard requirement.
+
+def _raise_vscode_window(repo: str) -> None:
+    """Brings the window already open for `repo` to front. Never shells out
+    to `code` at all: a bound slot always implies a window already exists
+    for it (that's what "bound" means in this project — raise_window is
+    never responsible for opening a new one). `code -r`/`--reuse-window`
+    was tried here previously and removed after a live incident: it doesn't
+    mean "reuse a window already showing this repo," it means "reuse
+    whichever window was last active regardless of content" — so raising
+    repo B while repo A's window was focused (e.g. a Tier-2 question
+    pending on it) silently repointed repo A's own window at B instead of
+    leaving it alone, effectively destroying the window the user needed.
+    The tradeoff here: if the target window is on a different macOS Space
+    (System Events can only enumerate windows on the *current* Space), this
+    falls back to a plain app-activate that won't switch Spaces — a
+    real but non-destructive limitation, unlike the alternative."""
     basename = Path(repo).name
     title = next((t for t in _list_vscode_window_titles() if _matches_repo(t, basename)), None)
 
-    if title is not None:
-        escaped_title = _escape_applescript_string(title)
-        script = f'''
-        tell application "System Events"
-            tell process "{VSCODE_PROCESS_NAME}"
-                perform action "AXRaise" of (first window whose name is "{escaped_title}")
-                set frontmost to true
-            end tell
-        end tell
-        '''
-        result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
-        if result.returncode == 0:
-            return
+    if title is not None and _axraise_vscode_window(title):
+        return
 
     subprocess.run(
         ["osascript", "-e", 'tell application "Visual Studio Code" to activate'],
@@ -125,10 +106,10 @@ def raise_window(slot: int) -> bool:
     otherwise whatever terminal app the hook detected via process ancestry
     (see hooks/post_event.sh's detect_app and
     daemon.config.TERM_PROGRAM_APP_NAMES) — brought to front as an app only,
-    no equivalent of `code -r`'s window targeting exists for a plain
-    terminal. Returns True if an attempt was made (repo bound + a raise
-    mechanism ran), not necessarily that the window actually came forward —
-    no reliable way to confirm that from outside the app."""
+    no per-window targeting exists for a plain terminal. Returns True if an
+    attempt was made (repo bound + a raise mechanism ran), not necessarily
+    that the window actually came forward — no reliable way to confirm that
+    from outside the app."""
     binding = slots.get(slot)
     if binding is None:
         return False
