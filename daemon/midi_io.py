@@ -31,6 +31,7 @@ from daemon.config import (
     ENCODER_CW_VALUE,
     PAD_CHANNEL,
     PAD_DEBOUNCE_SECONDS,
+    PAD_HOLD_TO_RAISE_SECONDS,
     PAD_LED_PORT_HINT,
     PAD_NOTES,
     SLOT_COUNT,
@@ -53,6 +54,8 @@ class MidiIO:
         self._last_pad_fire: dict[int, float] = {}
         self._last_sent_state: dict[int, str] = {}
         self._unbind_armed_until: float = 0.0
+        self._hold_timers: dict[int, threading.Timer] = {}
+        self._hold_timer_lock = threading.Lock()
 
     def stop(self) -> None:
         self._stop.set()
@@ -80,6 +83,8 @@ class MidiIO:
     def _handle_message(self, msg: mido.Message) -> None:
         if msg.type == "note_on" and msg.channel == PAD_CHANNEL and msg.velocity > 0:
             self._handle_pad_press(msg.note)
+        elif msg.type == "note_off" and msg.channel == PAD_CHANNEL:
+            self._handle_pad_release(msg.note)
         elif msg.type == "control_change" and msg.control == CC_ENCODER_TURN:
             self._handle_encoder_turn(msg.value)
         elif msg.type == "control_change" and CC_SHIFT_PAD_BASE <= msg.control < CC_SHIFT_PAD_BASE + SLOT_COUNT:
@@ -127,6 +132,43 @@ class MidiIO:
             return
 
         self.store.set_focus(slot)
+        self._arm_hold_timer(slot)
+
+    def _arm_hold_timer(self, slot: int) -> None:
+        """Schedules the hold-to-raise fire PAD_HOLD_TO_RAISE_SECONDS from
+        now, live while the pad is still held — see that constant's
+        docstring for why this fires during the hold rather than being
+        measured at release. Runs on its own thread (threading.Timer), not
+        the MIDI thread; raise_window() has no thread affinity requirement,
+        same as it being called from the HTTP thread for the widget's
+        /raise and /unbind."""
+        with self._hold_timer_lock:
+            self._cancel_hold_timer_locked(slot)
+            timer = threading.Timer(PAD_HOLD_TO_RAISE_SECONDS, self._fire_hold_raise, args=(slot,))
+            timer.daemon = True
+            self._hold_timers[slot] = timer
+            timer.start()
+
+    def _fire_hold_raise(self, slot: int) -> None:
+        with self._hold_timer_lock:
+            self._hold_timers.pop(slot, None)
+        actions.raise_window(slot)
+
+    def _cancel_hold_timer_locked(self, slot: int) -> None:
+        timer = self._hold_timers.pop(slot, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _handle_pad_release(self, note: int) -> None:
+        """Cancels the pending hold-to-raise timer if the pad was released
+        before it fired — a plain quick press only focuses, per
+        _handle_pad_press, and shouldn't retroactively raise a second later
+        just because it happened to be pressed once."""
+        if note not in PAD_NOTES:
+            return
+        slot = PAD_NOTES.index(note) + 1
+        with self._hold_timer_lock:
+            self._cancel_hold_timer_locked(slot)
 
     def _handle_claim_press(self, slot: int) -> None:
         claimed_cwd = pending_claim.claim(slot)
