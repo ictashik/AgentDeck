@@ -58,10 +58,24 @@ def unassign(slot: int) -> None:
 
 
 def find_slot_for_cwd(cwd: str) -> int | None:
+    """Matches `cwd` against a bound repo exactly, or against any repo that's
+    an ancestor directory of it — a hook firing from a subfolder (e.g. a
+    Bash tool `cd`ing into a repo's subdirectory mid-session, live-observed
+    for both this repo's own `widget/` subfolder and an unrelated repo's
+    nested folder) would otherwise look like an unrecognized new repo,
+    triggering a spurious pending-claim prompt and a duplicate binding for
+    what's really the same session. When multiple bindings match (e.g. a
+    subfolder is *also* explicitly pinned via tools/assign_slot.py, on top
+    of its parent repo being bound elsewhere), the most specific — longest
+    matching repo path — wins."""
+    best_slot: int | None = None
+    best_len = -1
     for slot_str, binding in load().items():
-        if binding["repo"] == cwd:
-            return int(slot_str)
-    return None
+        repo = binding["repo"].rstrip("/")
+        if (cwd == repo or cwd.startswith(repo + "/")) and len(repo) > best_len:
+            best_len = len(repo)
+            best_slot = int(slot_str)
+    return best_slot
 
 
 def free_slots() -> list[int]:
