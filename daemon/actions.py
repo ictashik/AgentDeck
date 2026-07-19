@@ -1,13 +1,16 @@
 """Side-effecting actions the MIDI/HTTP threads trigger: window-raising for
 Tier 2 (CLAUDE.md's "Expand"/Shift+pad step), and writing a conservative
 allow-rule for Tier 1's "Loop = allow always" button. No TTY, no tmux, no
-keystroke injection, and — deliberately — no `code` CLI invocation of any
-kind. "Raise the window" targets the specific VS Code window for a repo via
-System Events (exact title match, then AXRaise) only. See
-_raise_vscode_window's docstring for why `code -r` was removed entirely
-after a live incident: it doesn't reuse a window already showing the target
-repo, it reuses whichever window was *last active*, so it silently
-repointed an unrelated, currently-focused window at the wrong repo.
+keystroke injection, and — deliberately — no `code -r`/`--reuse-window`
+anywhere. "Raise the window" first targets the specific VS Code window for
+a repo via System Events (exact title match, then AXRaise); when that can't
+find/raise a window (closed, or full-screen/on another Space — System
+Events only sees the current Space) it falls back to `open -a` (see
+_raise_vscode_window's docstring). See that docstring for why `code -r` was
+removed entirely after a live incident: it doesn't reuse a window already
+showing the target repo, it reuses whichever window was *last active*, so
+it silently repointed an unrelated, currently-focused window at the wrong
+repo.
 """
 
 from __future__ import annotations
@@ -72,24 +75,42 @@ def _axraise_vscode_window(title: str) -> bool:
 
 
 def _raise_vscode_window(repo: str) -> None:
-    """Brings the window already open for `repo` to front. Never shells out
-    to `code` at all: a bound slot always implies a window already exists
-    for it (that's what "bound" means in this project — raise_window is
-    never responsible for opening a new one). `code -r`/`--reuse-window`
-    was tried here previously and removed after a live incident: it doesn't
-    mean "reuse a window already showing this repo," it means "reuse
-    whichever window was last active regardless of content" — so raising
-    repo B while repo A's window was focused (e.g. a Tier-2 question
-    pending on it) silently repointed repo A's own window at B instead of
-    leaving it alone, effectively destroying the window the user needed.
-    The tradeoff here: if the target window is on a different macOS Space
-    (System Events can only enumerate windows on the *current* Space), this
-    falls back to a plain app-activate that won't switch Spaces — a
-    real but non-destructive limitation, unlike the alternative."""
+    """Brings the window for `repo` to front — reopening it if it was
+    closed. Tries System Events' exact-title AXRaise first (precise, and
+    live-confirmed to work for a window that's open, not full-screen, and
+    on the current Space); `code -r`/`--reuse-window` was tried here
+    previously and removed after a live incident: it doesn't mean "reuse a
+    window already showing this repo," it means "reuse whichever window
+    was last active regardless of content" — so raising repo B while repo
+    A's window was focused (e.g. a Tier-2 question pending on it) silently
+    repointed repo A's own window at B instead of leaving it alone,
+    effectively destroying the window the user needed.
+
+    When AXRaise can't find/raise a window — because it's closed, or
+    because it's full-screen/on a different Space (System Events can only
+    enumerate windows on the *current* Space, a well-known Accessibility
+    API limit) — fall back to `open -a "Visual Studio Code" <repo>`. This
+    is not `-r`: it hands the path to VS Code's own already-running
+    instance over LaunchServices/IPC, and VS Code itself decides what to
+    do with it — opens a fresh window if `repo` isn't open anywhere (fixes
+    the closed-window case), or requests focus for its own existing window
+    if `repo` already is (fixes the full-screen/cross-Space case, since
+    it's the app itself asking for focus on its own window, which macOS
+    permits switching Spaces for — unlike a background process forcing it
+    via System Events). Live-verified against both cases: reopens a closed
+    repo's window, and raises a full-screen one from a different Space."""
     basename = Path(repo).name
     title = next((t for t in _list_vscode_window_titles() if _matches_repo(t, basename)), None)
 
     if title is not None and _axraise_vscode_window(title):
+        return
+
+    result = subprocess.run(
+        ["open", "-a", "Visual Studio Code", repo],
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode == 0:
         return
 
     subprocess.run(
