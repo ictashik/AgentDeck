@@ -101,3 +101,12 @@ def message_for_available(note: int) -> PadColorMessage:
     session blink states (amber=permission, blue=question) at the same
     rhythm as the more urgent of the two."""
     return pad_color_message(note, COLOR_WHITE, channel=BLINK_FAST)
+
+
+def message_for_empty(note: int) -> PadColorMessage:
+    """No repo bound and nothing currently queued to claim it — fully OFF.
+    Deliberately distinct from `idle` (dim white, STATE_COLORS above), which
+    means a repo IS bound and its session just isn't doing anything right
+    now. Without this, an unbound slot fell through to message_for_state's
+    default ("idle") and looked identical to a real idle session."""
+    return pad_color_message(note, COLOR_OFF, channel=BRIGHTNESS_DIM)
