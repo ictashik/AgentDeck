@@ -265,12 +265,16 @@ def post_claim(payload: SlotPayload, x_agentdeck_token: str | None = Header(defa
 
 @app.post("/unbind")
 def post_unbind(payload: SlotPayload, x_agentdeck_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """The widget's unbind action, mirroring daemon/midi_io.py's
-    _handle_unbind_press (Record+Pad on hardware) minus the notification."""
+    """The widget's unbind action. Deliberately does NOT raise the window
+    first, unlike daemon/midi_io.py's _handle_unbind_press (Record+Pad on
+    hardware): that raise-before-unassign exists there because a blind
+    physical button sequence has no other way to show which repo you're
+    about to disconnect. The widget's right-click "Unbind" is already on a
+    labeled pad tile in the grid — you can see exactly what you're
+    unbinding without the window stealing focus."""
     require_token(x_agentdeck_token)
     if store is None:
         raise HTTPException(status_code=503, detail="store not initialized")
-    actions.raise_window(payload.slot)  # raise first — needs the binding, which unassign below removes
     slots.unassign(payload.slot)
     store.reset(payload.slot)
     return {"ok": True}

@@ -27,10 +27,4 @@ enum Motion {
     /// How long the hover-triggered peek shows each actionable slot before
     /// cycling to the next one, when several slots are actionable at once.
     static let peekCycleInterval: Double = 2.5
-
-    /// `done` renders as `idle` once this many seconds have passed since
-    /// updated_at — purely a client-side rendering rule (§4: "fades to idle
-    /// after a few seconds"); the daemon's JSON keeps saying "done" until
-    /// the next real hook event.
-    static let doneToIdleFadeAfter: Double = 3.5
 }

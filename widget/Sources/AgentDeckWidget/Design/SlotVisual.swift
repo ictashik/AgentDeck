@@ -5,14 +5,16 @@ import SwiftUI
 /// pad tiles), so a given slot renders identically at any size (§1:
 /// "hardware/software color parity").
 enum SlotVisual {
-    /// `done` renders as `idle` once past the fade threshold (§4) — a pure
-    /// rendering substitution, the underlying JSON state is untouched.
+    /// §4 originally called for `done` to fade to an `idle` look client-side
+    /// after a few seconds, but that has no hardware equivalent — the pad
+    /// LED just reflects whatever `state` currently is (daemon/midi_io.py's
+    /// `_refresh_pad_colors`), and the daemon never auto-transitions `done`
+    /// back to `idle` on its own (only the next real hook event changes
+    /// it). A session sitting `done` for a while showed solid green on the
+    /// MPK but faded to grey on screen — a live-reported parity bug — so
+    /// this is deliberately a pass-through now, matching hardware exactly.
     static func displayState(for slot: SlotState, at date: Date) -> String {
-        if slot.state == "done" {
-            let age = date.timeIntervalSince1970 - slot.updatedAt
-            if age > Motion.doneToIdleFadeAfter { return "idle" }
-        }
-        return slot.state
+        slot.state
     }
 
     static func opacity(for state: String, at date: Date) -> Double {
