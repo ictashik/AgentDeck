@@ -56,7 +56,24 @@ SLOT_ENV_VAR = "AGENTDECK_SLOT"
 
 # MPC-style pads are pressure-sensitive and double-fire on a single physical
 # press; ignore repeat Note On for the same slot within this window.
+# Live-measured (tools/... one-off capture, see progressboard.md): a single
+# ordinary press produces two Note On messages ~247ms apart, which is why
+# hold-to-raise below is measured from press to the pad's Note Off (release)
+# rather than from press to a second Note On — a deliberate double-tap
+# gesture would fall in the same ~250ms range as this hardware artifact and
+# be unreliable to detect by inter-press timing alone.
 PAD_DEBOUNCE_SECONDS = 0.4
+
+# Holding a pad this long also raises the slot's window — fired live, while
+# the pad is still held (a threading.Timer armed on press, cancelled on Note
+# Off if released early), not measured retroactively at release: pressing
+# and holding until you see the window come forward is the natural gesture,
+# not press-then-release-then-wait. In addition to the normal
+# focus-on-press, this is the hardware equivalent of a double-click on a pad
+# tile in the widget. Live-confirmed pads send a clean Note On/Note Off pair
+# with nothing in between during a hold (no continuous aftertouch stream),
+# so "no Note Off yet" is a reliable "still held" signal.
+PAD_HOLD_TO_RAISE_SECONDS = 1.0
 
 # How long /permission-wait blocks for a MIDI decision before giving up and
 # returning "no decision" (letting Claude Code's own prompt show). Kept a bit
