@@ -30,5 +30,6 @@ struct PeekView: View {
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SlotColor.backgroundBottom)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

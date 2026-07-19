@@ -23,5 +23,6 @@ struct ExpandedView: View {
         .frame(width: ExpandedLayout.panelWidth, height: ExpandedLayout.panelHeight)
         .background(.regularMaterial)
         .background(SlotColor.backgroundBottom.opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

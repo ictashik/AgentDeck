@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// §2.1: the default, always-present compact pill. Fully opaque, fused to
-/// the notch's black. Dots are laid out as a 4×2 grid mirroring the
-/// physical MPK's own pad numbering (PadLayout) rather than one flat row of
-/// 8, so the pill reads as a tiny mirror of the hardware grid, not just a
-/// status strip — sized tight enough (smaller dots/gaps than the expanded
-/// grid) that the pill's overall footprint doesn't grow versus the single
-/// row this replaced.
+/// §2.1: the default, always-present compact pill. Positioned just to the
+/// right of the physical notch cutout (see OverlayPanel) rather than on top
+/// of it, so it reads as a small floating black capsule rather than a
+/// continuation of the notch's own shape — hence the rounded corners here,
+/// which the original flush-with-the-notch design deliberately didn't have.
+/// Dots are laid out as a 4×2 grid mirroring the physical MPK's own pad
+/// numbering (PadLayout) rather than one flat row of 8, so the pill reads as
+/// a tiny mirror of the hardware grid, not just a status strip — sized tight
+/// enough (smaller dots/gaps than the expanded grid) that the pill's overall
+/// footprint doesn't grow versus the single row this replaced.
 struct PillView: View {
     let snapshot: HubSnapshot
 
@@ -34,6 +37,7 @@ struct PillView: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SlotColor.backgroundBottom)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func row(_ slotNumbers: [Int]) -> some View {

@@ -42,6 +42,10 @@ from daemon.state import SessionStore
 
 POLL_INTERVAL_SECONDS = 0.02
 
+# How often to re-check for the DAW Port while the MPK isn't connected (at
+# startup, or after being unplugged mid-session).
+RECONNECT_POLL_SECONDS = 1.5
+
 
 def _find_daw_port_name(names: list[str]) -> str | None:
     return next((n for n in names if PAD_LED_PORT_HINT in n), None)
@@ -61,22 +65,70 @@ class MidiIO:
         self._stop.set()
 
     def run(self) -> None:
-        in_name = _find_daw_port_name(mido.get_input_names())
-        out_name = _find_daw_port_name(mido.get_output_names())
-        if in_name is None or out_name is None:
-            print(f"MidiIO: no '{PAD_LED_PORT_HINT}' port found — device not connected? Skipping MIDI I/O.")
-            self.store.set_midi_connected(False)
-            return
+        """Outer loop that keeps retrying until the DAW Port shows up, and
+        keeps retrying again if it disappears (unplugged) mid-session —
+        rather than the previous one-shot check at startup, which meant
+        connecting the MPK *after* the daemon was already running silently
+        did nothing (the MIDI thread had already given up and exited)."""
+        already_waiting = False
+        while not self._stop.is_set():
+            in_name = _find_daw_port_name(mido.get_input_names())
+            out_name = _find_daw_port_name(mido.get_output_names())
+            if in_name is None or out_name is None:
+                self.store.set_midi_connected(False)
+                if not already_waiting:
+                    print(f"MidiIO: no '{PAD_LED_PORT_HINT}' port found — waiting for the device to be connected...")
+                    already_waiting = True
+                self._stop.wait(RECONNECT_POLL_SECONDS)
+                continue
+            already_waiting = False
 
-        with mido.open_input(in_name) as inport, mido.open_output(out_name) as outport:
-            self._outport = outport
-            self.store.set_midi_connected(True)
             try:
-                while not self._stop.is_set():
-                    for msg in inport.iter_pending():
-                        self._handle_message(msg)
-                    self._refresh_pad_colors()
-                    time.sleep(POLL_INTERVAL_SECONDS)
+                with mido.open_input(in_name) as inport, mido.open_output(out_name) as outport:
+                    self._outport = outport
+                    self.store.set_midi_connected(True)
+                    # Force every pad's color to be sent fresh on (re)connect
+                    # rather than trusting dedup state from before — the
+                    # device always comes up with its LEDs off/default, so
+                    # the current session state has to be reapplied in full
+                    # even though nothing about the sessions changed.
+                    self._last_sent_state.clear()
+                    print(f"MidiIO: connected to '{PAD_LED_PORT_HINT}'.")
+                    last_presence_check = time.monotonic()
+                    while not self._stop.is_set():
+                        for msg in inport.iter_pending():
+                            self._handle_message(msg)
+                        self._refresh_pad_colors()
+
+                        # CoreMIDI/rtmidi does *not* reliably raise on a
+                        # hot-unplug — live-observed: send()/iter_pending()
+                        # on an already-open port just go quiet, no
+                        # exception — so presence has to be actively polled
+                        # rather than waited for as an error. Once it's
+                        # gone, break back out to the outer loop, which
+                        # closes these stale port handles (the `with`
+                        # exiting) and starts polling for the device to
+                        # come back.
+                        now = time.monotonic()
+                        if now - last_presence_check >= RECONNECT_POLL_SECONDS:
+                            last_presence_check = now
+                            still_present = (
+                                _find_daw_port_name(mido.get_input_names()) == in_name
+                                and _find_daw_port_name(mido.get_output_names()) == out_name
+                            )
+                            if not still_present:
+                                print(f"MidiIO: '{PAD_LED_PORT_HINT}' disappeared — device unplugged?")
+                                break
+
+                        time.sleep(POLL_INTERVAL_SECONDS)
+            except Exception as exc:  # noqa: BLE001 - belt-and-suspenders: if some
+                # backend/platform combination *does* raise on unplug, fall
+                # back to reconnect-polling instead of silently killing the
+                # MIDI thread for the rest of the daemon's life, same as the
+                # active presence-poll above handles the common case where
+                # nothing gets raised at all.
+                if not self._stop.is_set():
+                    print(f"MidiIO: lost connection to '{PAD_LED_PORT_HINT}' ({exc}) — will retry.")
             finally:
                 self.store.set_midi_connected(False)
 
